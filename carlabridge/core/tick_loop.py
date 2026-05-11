@@ -23,12 +23,17 @@ import logging
 import sys
 import threading
 import time
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
+from carlabridge.core.atomic import AtomicRef
 from carlabridge.core.clock import SimClock
 from carlabridge.core.fleet import Fleet
+from carlabridge.core.snapshot import SnapshotBuilder, WorldSnapshot
 from carlabridge.obs.event_log import EventLog
 from carlabridge.obs.metrics import Metrics
+
+if TYPE_CHECKING:  # pragma: no cover
+    from carlabridge.sensors.camera import CameraManager
 
 log = logging.getLogger(__name__)
 
@@ -113,6 +118,9 @@ class TickLoop:
         scenario: Scenario,
         metrics: Metrics,
         event_log: EventLog,
+        snapshot_builder: SnapshotBuilder | None = None,
+        snapshot_ref: AtomicRef[WorldSnapshot] | None = None,
+        camera_manager: "CameraManager | None" = None,
         behind_warn_threshold: float = 1.5,
     ) -> None:
         self._world = world
@@ -121,6 +129,9 @@ class TickLoop:
         self._scenario = scenario
         self._metrics = metrics
         self._event_log = event_log
+        self._snapshot_builder = snapshot_builder
+        self._snapshot_ref = snapshot_ref
+        self._camera_manager = camera_manager
         self._behind_warn_threshold = behind_warn_threshold
 
         self._shutdown = threading.Event()
@@ -194,10 +205,22 @@ class TickLoop:
         self._world.tick()
         # 4. advance bridge clock
         self._clock.advance()
-        # 5. (M2 will build & publish WorldSnapshot here)
-        # 6. post-tick scenario hook
+        # 5. build & publish WorldSnapshot (M2)
+        if self._snapshot_builder is not None and self._snapshot_ref is not None:
+            try:
+                snap = self._snapshot_builder.build(self._fleet, self._clock.sim_time)
+                self._snapshot_ref.set(snap)
+            except Exception:
+                log.exception("snapshot build failed; tick continues")
+        # 6. follows_virtual cameras: drive set_transform from VirtualMember pose (M4)
+        if self._camera_manager is not None:
+            try:
+                self._camera_manager.update_followers(self._fleet)
+            except Exception:
+                log.exception("camera update_followers failed; tick continues")
+        # 7. post-tick scenario hook
         self._scenario.on_tick_post(self._clock.sim_time)
-        # 7. fps sampling
+        # 8. fps sampling
         self._sample_fps()
 
     def _sample_fps(self) -> None:

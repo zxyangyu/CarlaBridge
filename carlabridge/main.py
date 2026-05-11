@@ -2,6 +2,8 @@
 
 M0: HTTP + Socket.IO skeleton.
 M1: + CARLA connection, sync mode, tick thread (NoopScenario placeholder).
+M2: + WorldSnapshot atomic ref + 10Hz broadcaster (state_update / state_snapshot).
+M3: + city camera (world_pose) + WebRTC signaling (POST /webrtc/{camera_id}).
 
 Usage:
     python -m carlabridge.main [--config PATH] [--scenario NAME] [--log-level LVL]
@@ -18,14 +20,20 @@ from pathlib import Path
 
 from aiohttp import web
 
+from carlabridge.bus.broadcaster import Broadcaster
+from carlabridge.bus.projector import FocusBinding
 from carlabridge.bus.server import build_app
 from carlabridge.config import Settings, load_settings
+from carlabridge.core.atomic import AtomicRef
 from carlabridge.core.clock import SimClock
 from carlabridge.core.fleet import Fleet
+from carlabridge.core.snapshot import SnapshotBuilder, WorldSnapshot
 from carlabridge.core.tick_loop import NoopScenario, TickLoop
 from carlabridge.core.world import BridgeFatal, World
 from carlabridge.obs.event_log import EventLog
 from carlabridge.obs.metrics import Metrics
+from carlabridge.sensors.camera import CameraBinding, CameraManager, CameraSpec
+from carlabridge.streaming.webrtc import shutdown_peer_connections
 
 log = logging.getLogger("carlabridge")
 
@@ -50,6 +58,35 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def _seed_bindings(camera_manager: CameraManager) -> None:
+    """M4 default channel layout. Scenarios (M5) override aerial/ground."""
+    # city: world_pose high overhead, Town10HD-friendly z=200, pitch -90°
+    camera_manager.bind(CameraBinding(spec=CameraSpec(
+        id="city", mode="world_pose",
+        x=0.0, y=0.0, z=200.0,
+        pitch=-90.0, yaw=0.0, roll=0.0,
+        fov=90.0, width=1280, height=720, fps=25,
+    )))
+    # aerial: follows_virtual UAV — scenario must set attach_entity_id at setup.
+    camera_manager.bind(CameraBinding(spec=CameraSpec(
+        id="aerial", mode="follows_virtual",
+        # Offset relative to UAV's world pose (M4 uses world-frame offset).
+        x=0.0, y=0.0, z=20.0,
+        pitch=-30.0, yaw=0.0, roll=0.0,
+        fov=90.0, width=1280, height=720, fps=25,
+        attach_entity_id=None,  # scenario fills this in
+    )))
+    # ground: attached_to_actor UGV — scenario must set attach_entity_id.
+    camera_manager.bind(CameraBinding(spec=CameraSpec(
+        id="ground", mode="attached_to_actor",
+        # Offset in actor-local frame: above + slightly behind.
+        x=-3.0, y=0.0, z=2.0,
+        pitch=-10.0, yaw=0.0, roll=0.0,
+        fov=70.0, width=1280, height=720, fps=25,
+        attach_entity_id=None,
+    )))
+
+
 def _apply_cli_overrides(settings: Settings, args: argparse.Namespace) -> Settings:
     if args.scenario:
         settings.scenario.default = args.scenario
@@ -64,9 +101,21 @@ async def _run(settings: Settings, *, no_carla: bool) -> int:
     fleet = Fleet()
     event_log.add("ok", "BRIDGE", "CarlaBridge starting")
 
+    # Snapshot infra is created up-front so the http server can hand it to
+    # the namespaces (on_connect emits depend on it).
+    snapshot_ref: AtomicRef[WorldSnapshot] = AtomicRef()
+    focus = FocusBinding()
+    camera_manager = CameraManager()
+    # M4: pre-bind the three frontend channels (aerial / ground / city) so
+    # the signaling route and on-connect snapshot find their FrameQueues
+    # immediately. aerial / ground stay unspawned until a scenario (M5) sets
+    # their attach_entity_id; city is unattached (world_pose) and spawns now.
+    _seed_bindings(camera_manager)
+
     world: World | None = None
     tick_loop: TickLoop | None = None
     runner: web.AppRunner | None = None
+    broadcaster: Broadcaster | None = None
     exit_code = 0
 
     try:
@@ -95,7 +144,15 @@ async def _run(settings: Settings, *, no_carla: bool) -> int:
 
         # ---------- 2. HTTP + Socket.IO ---------------------------------
         stop_event = asyncio.Event()
-        app, _sio = build_app(settings, event_log, metrics, shutdown_event=stop_event)
+        app, sio = build_app(
+            settings,
+            event_log,
+            metrics,
+            snapshot_ref=snapshot_ref,
+            focus=focus,
+            camera_manager=camera_manager,
+            shutdown_event=stop_event,
+        )
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, settings.server.host, settings.server.port)
@@ -130,9 +187,23 @@ async def _run(settings: Settings, *, no_carla: bool) -> int:
             f"http listening on {settings.server.host}:{settings.server.port}",
         )
 
-        # ---------- 3. tick thread (NoopScenario for M1) ----------------
+        # ---------- 3. bind frame queues to loop + spawn cameras --------
+        # Bind all known queues to the running loop before any producer fires.
+        for q in camera_manager.queues.values():
+            q.bind_loop()
+        if world is not None:
+            try:
+                camera_manager.spawn_all(world.carla_world, fleet)
+                for cid in camera_manager.cameras:
+                    event_log.add("ok", "CARLA", f"camera {cid} spawned")
+            except Exception as e:
+                log.exception("camera spawn_all failed")
+                event_log.add("danger", "CARLA", f"camera spawn_all failed: {e}")
+
+        # ---------- 4. tick thread + snapshot builder (NoopScenario) ----
         if world is not None:
             clock = SimClock(delta=settings.carla.fixed_delta_seconds)
+            snapshot_builder = SnapshotBuilder(world=world.carla_world)
             tick_loop = TickLoop(
                 world=world,
                 clock=clock,
@@ -140,11 +211,25 @@ async def _run(settings: Settings, *, no_carla: bool) -> int:
                 scenario=NoopScenario(),
                 metrics=metrics,
                 event_log=event_log,
+                snapshot_builder=snapshot_builder,
+                snapshot_ref=snapshot_ref,
+                camera_manager=camera_manager,
             )
             tick_loop.start()
             event_log.add("ok", "BRIDGE", "tick loop running (NoopScenario)")
 
-        # ---------- 4. wait for shutdown --------------------------------
+        # ---------- 5. broadcaster --------------------------------------
+        broadcaster = Broadcaster(
+            sio=sio,
+            snapshot_ref=snapshot_ref,
+            focus=focus,
+            metrics=metrics,
+            state_hz=settings.broadcast.state_hz,
+            metrics_hz=settings.broadcast.metrics_hz,
+        )
+        broadcaster.start()
+
+        # ---------- 6. wait for shutdown --------------------------------
         loop = asyncio.get_running_loop()
 
         def _request_stop() -> None:
@@ -164,15 +249,26 @@ async def _run(settings: Settings, *, no_carla: bool) -> int:
             _request_stop()
     finally:
         event_log.add("warn", "BRIDGE", "shutting down")
-        # 5a. stop tick thread BEFORE restoring CARLA (no ticks during restore)
+        # 7a. stop broadcaster before HTTP teardown
+        if broadcaster is not None:
+            await broadcaster.stop()
+        # 7b. close all WebRTC peer connections (also drains encoder tasks)
+        await shutdown_peer_connections()
+        # 7c. stop tick thread BEFORE restoring CARLA (no ticks during restore)
         if tick_loop is not None:
             log.info("stopping tick loop…")
             tick_loop.stop()
             tick_loop.join(timeout=3.0)
-        # 5b. drain HTTP / Socket.IO
+        # 7d. detach CARLA cameras BEFORE restoring async mode (cameras are
+        #     CARLA actors; in async mode their listener semantics change)
+        try:
+            camera_manager.detach_all()
+        except Exception:
+            log.exception("camera detach_all failed")
+        # 7e. drain HTTP / Socket.IO
         if runner is not None:
             await runner.cleanup()
-        # 5c. restore CARLA async mode + disconnect (CRITICAL — runs even
+        # 7f. restore CARLA async mode + disconnect (CRITICAL — runs even
         #     if startup failed after switch_to_sync)
         if world is not None:
             try:

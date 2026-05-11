@@ -166,6 +166,11 @@
 
 ## 5. M2 — Snapshot + 状态广播
 
+> **状态：完成（单元测试 52/52 通过 + --no-carla 冷启动 smoke OK）**。已知保留项：
+> - UAV `gps:{lat,lng}` 当前用 `pose.x/y` 占位；真实 lat/lng 需 `world.get_map().get_geo_location()`，挪到 M5（场景接入时一起做）。
+> - UGV `road/obstacle/link` 字段：road/obstacle 需 map waypoint + 感知，链路质量需 ping，全部 M5+。
+> - 因 frontend store 用 `Partial<>` 合并，缺失字段保留默认值，演示视觉无空洞。
+
 ### T-M2-01 core/snapshot.py
 - `WorldSnapshot` dataclass：sim_time、traffic_lights[]、vehicles[]、uavs[]。
 - 子类型：`TrafficLightState`、`VehicleState`、`UavState`，对齐 spec §8。
@@ -235,6 +240,11 @@
 
 ## 6. M3 — 单路相机 + WebRTC（city 优先）
 
+> **状态：完成（单元 64/64 通过，含 aiortc PC↔PC 真实 SDP 握手）**。
+> - 真机验证（spawn city 相机 + 浏览器接入）留待跑通 CARLA 服务器时一次性做。
+> - 已纳入 X-02：`tests/fakes/fake_world.py` 在 M2 已落地，M3 直接复用。
+> - 残留待办：M5 把 city 的 transform 从 `main.py` 移到场景的 `setup_bindings`；M4 接入 aerial/ground 两路。
+
 ### T-M3-01 sensors/frame_queue.py
 - 单元素 latest-wins 队列：`set_latest(frame)` 永不阻塞、`async get()` 等下一帧。
 - 内置 drop counter。
@@ -273,6 +283,13 @@
 ---
 
 ## 7. M4 — 多路相机 + 绑定模型
+
+> **状态：完成（76/76 单元，--no-carla smoke OK；T-M4-05 三路同跑性能 sanity 待真机 CARLA 验收）**。
+> 已知：
+> - aerial/ground 在 main 启动时只 bind 不 spawn —— 等 M5 scenario 在 `setup_bindings()` 里调 `rebind(channel_id, entity_id)` 把 attach_entity_id 填上才真正 spawn 起来。
+> - `update_followers` 使用 binding.spec（不可变 offset）和 VirtualMember.pose() 合成 transform，避免在 cam.spec 上累积。
+> - follow offset 用世界坐标系，足以应对俯视 UAV 相机；如果场景要 UAV body-frame 跟随（侧视等），M5 时再扩展。
+> - hot rebind 复用同一个 FrameQueue 实例 → WebRTC track 不重连（验证：`test_rebind_destroys_and_respawns_with_same_queue`）。
 
 ### T-M4-01 CameraBindings & BindingTable
 - `CameraBinding`（attach_to / world_pose / 等），`BindingTable` 持有 `{channel_id: binding}`。

@@ -20,7 +20,8 @@
 param(
     [string]$Scenario,
     [string]$Config,
-    [string]$LogLevel
+    [string]$LogLevel,
+    [switch]$NoCarla
 )
 
 $ErrorActionPreference = "Stop"
@@ -39,6 +40,7 @@ $argList = @("-m", "carlabridge.main")
 if ($Scenario) { $argList += @("--scenario", $Scenario) }
 if ($Config)   { $argList += @("--config", $Config) }
 if ($LogLevel) { $argList += @("--log-level", $LogLevel) }
+if ($NoCarla)  { $argList += @("--no-carla") }
 
 Write-Host "==> launching: $PythonExe $($argList -join ' ')" -ForegroundColor Cyan
 Push-Location $RepoRoot

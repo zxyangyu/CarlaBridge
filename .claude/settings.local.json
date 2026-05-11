@@ -11,7 +11,12 @@
       "Bash(python \"D:\\\\carla\\\\env\\\\Scripts\\\\python.exe\" -c \"import socketio; print\\(socketio.__version__\\)\")",
       "Bash(\"D:\\\\carla\\\\env\\\\Scripts\\\\python.exe\" -c \"import socketio; print\\(dir\\(socketio\\)\\)\")",
       "Bash(git *)",
-      "Bash(D:/carla/env/python.exe *)"
+      "Bash(D:/carla/env/python.exe *)",
+      "Bash(curl -s http://127.0.0.1:5000/healthz)",
+      "Bash(python -m json.tool)",
+      "Bash(curl -s -X POST http://127.0.0.1:5000/webrtc/nope -H \"Content-Type: application/json\" -d '{\"sdp\":\"x\",\"type\":\"offer\"}')",
+      "Bash(curl -s -X POST http://127.0.0.1:5000/webrtc/city -H \"Content-Type: application/json\" -d '{\"sdp\":\"bad\",\"type\":\"offer\"}')",
+      "Bash(curl -s -X POST http://127.0.0.1:5000/admin/shutdown)"
     ]
   }
 }
