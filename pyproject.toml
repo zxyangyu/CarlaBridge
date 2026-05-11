@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "carlabridge"
+version = "0.1.0"
+description = "Realtime middleware bridging CARLA simulation to web frontend and urban agent."
+requires-python = ">=3.12,<3.13"
+authors = [{ name = "CarlaBridge Team" }]
+readme = "README.md"
+license = { text = "Proprietary" }
+
+dependencies = [
+    "aiohttp>=3.9",
+    "python-socketio>=5.10",
+    "aiortc>=1.7",
+    "av>=12.0",
+    "numpy>=1.26,<2",
+    "pydantic>=2.5",
+    "pydantic-settings>=2.1",
+    "psutil>=5.9",
+    "tomli-w>=1.0",
+    # Required by CARLA's bundled BasicAgent (D:/carla/PythonAPI/carla/agents).
+    "shapely>=2.0",
+    "networkx>=3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+    "pytest-asyncio>=0.23",
+]
+
+[project.scripts]
+carlabridge = "carlabridge.main:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["carlabridge*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+# NOTE: The `carla` package is provided by CARLA's bundled wheel at
+#   D:/carla/PythonAPI/carla/dist/carla-0.9.16-cp312-cp312-win_amd64.whl
+# It must already be installed in the active conda env. We do not list it
+# as a dependency here because it's not on PyPI.
+#
+# BasicAgent and friends live at D:/carla/PythonAPI/carla/agents and are
+# added to sys.path at runtime by carlabridge/__init__.py (see code).

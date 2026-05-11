@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"D:\\\\CarlaBridge\" -Recurse -Force)",
+      "Bash(Select-Object FullName, PSIsContainer)",
+      "Bash(ConvertTo-Json)",
+      "Bash(find \"D:\\\\\\\\CarlaBridge\" -type f)",
+      "Bash(find D:\\\\\\\\CarlaBridge *)",
+      "Bash(ls *)",
+      "Bash(grep -vE \"\\\\.dist-info|__pycache__|\\\\.pyd|\\\\.py$\")",
+      "Bash(python \"D:\\\\carla\\\\env\\\\Scripts\\\\python.exe\" -c \"import socketio; print\\(socketio.__version__\\)\")",
+      "Bash(\"D:\\\\carla\\\\env\\\\Scripts\\\\python.exe\" -c \"import socketio; print\\(dir\\(socketio\\)\\)\")",
+      "Bash(git *)",
+      "Bash(D:/carla/env/python.exe *)"
+    ]
+  }
+}
