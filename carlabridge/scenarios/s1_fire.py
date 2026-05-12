@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 from carlabridge.commands.enum import CommandKind, ParsedCommand, RejectCommand
 from carlabridge.core.fleet import CarlaActorMember, Pose, VirtualMember
 from carlabridge.scenarios.base import Scenario, register_scenario
+from carlabridge.scenarios.waypoint_follower import SimpleWaypointFollower
 
 if TYPE_CHECKING:  # pragma: no cover
     from carlabridge.agent.link import AgentLink
@@ -112,8 +113,9 @@ class S1FireScenario(Scenario):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # UGV state machine — non-None when a UGV_DISPATCH/RTL is in flight.
-        self._ugv_basic_agent: object | None = None
+        # UGV state: non-None when a SimpleWaypointFollower is in flight.
+        self._ugv_follower: SimpleWaypointFollower | None = None
+        self._ugv_arrived_announced = False
         self._ugv_origin: Pose | None = None
         self._anchor_world_xyz: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._anchor_yaw: float = 0.0
@@ -137,7 +139,52 @@ class S1FireScenario(Scenario):
         spawn_points = carla_world.get_map().get_spawn_points()
         if not spawn_points:
             raise RuntimeError("Town10HD_Opt: no spawn points returned")
-        anchor = spawn_points[0]
+        log.info("S1: %d spawn points available", len(spawn_points))
+
+        # ---- UGV: walk spawn_points + every vehicle.* blueprint -------
+        bp_lib = carla_world.get_blueprint_library()
+        # Preferred families first, then everything matching vehicle.*.
+        preferred = list(_filter_existing(bp_lib, UGV_BLUEPRINT_CANDIDATES))
+        all_vehicles = list(bp_lib.filter("vehicle.*"))
+        # De-dup while preserving order: preferred first, then any other vehicle.
+        seen_ids: set[str] = set()
+        candidates = []
+        for bp in preferred + all_vehicles:
+            if bp.id in seen_ids:
+                continue
+            seen_ids.add(bp.id)
+            candidates.append(bp)
+        log.info(
+            "S1: trying %d vehicle blueprint(s) across %d spawn point(s)",
+            len(candidates), len(spawn_points),
+        )
+
+        ugv_actor = None
+        anchor = None
+        for tf in spawn_points:
+            for bp in candidates:
+                try:
+                    actor = carla_world.try_spawn_actor(bp, tf)
+                except Exception:
+                    log.exception("UGV: spawn(%s) raised", bp.id)
+                    continue
+                if actor is not None:
+                    ugv_actor = actor
+                    anchor = tf
+                    log.info(
+                        "UGV spawned: bp=%s actor_id=%d at spawn_point (%.1f, %.1f, %.1f)",
+                        bp.id, actor.id,
+                        tf.location.x, tf.location.y, tf.location.z,
+                    )
+                    break
+            if ugv_actor is not None:
+                break
+        if ugv_actor is None or anchor is None:
+            raise RuntimeError(
+                f"S1: no UGV could be spawned ({len(candidates)} blueprints × "
+                f"{len(spawn_points)} spawn points all failed — every spot "
+                f"appears occupied or no vehicle blueprints present)"
+            )
         ax, ay, az = anchor.location.x, anchor.location.y, anchor.location.z
         self._anchor_world_xyz = (ax, ay, az)
         self._anchor_yaw = anchor.rotation.yaw
@@ -146,12 +193,6 @@ class S1FireScenario(Scenario):
             ax, ay, az, anchor.rotation.yaw,
         )
 
-        # ---- UGV ------------------------------------------------------
-        ugv_actor = self._spawn_first_available(
-            UGV_BLUEPRINT_CANDIDATES, anchor, kind="UGV"
-        )
-        if ugv_actor is None:
-            raise RuntimeError("S1: no UGV blueprint could be spawned")
         self._register_actor(ugv_actor)
         self.fleet.register(
             CarlaActorMember(entity_id="UGV-01", role="dispatchable", actor=ugv_actor)
@@ -213,9 +254,9 @@ class S1FireScenario(Scenario):
         )
 
     def teardown(self) -> None:
-        # Drop the BasicAgent first — it holds a reference to the UGV actor
-        # which is about to be destroyed by super().teardown().
-        self._ugv_basic_agent = None
+        # Drop follower first — it holds a reference to the UGV actor which
+        # is about to be destroyed by super().teardown().
+        self._ugv_follower = None
         super().teardown()
 
     # ---- per-tick hooks ----------------------------------------------
@@ -225,25 +266,27 @@ class S1FireScenario(Scenario):
         dt = 1.0 / 30.0
         for uav in self.fleet.virtual():
             uav.step(dt)
-
-        # Drive UGV via BasicAgent when a DISPATCH/RTL is in flight.
-        if self._ugv_basic_agent is not None:
+        # Drive UGV via SimpleWaypointFollower when a DISPATCH/RTL is active.
+        # The follower only does light RPCs (get_transform + get_velocity +
+        # apply_control), avoiding the BasicAgent RPC storm.
+        if self._ugv_follower is not None:
             try:
-                control = self._ugv_basic_agent.run_step()
+                control = self._ugv_follower.run_step()
                 ugv_member = self.fleet.get("UGV-01")
                 if isinstance(ugv_member, CarlaActorMember):
                     ugv_member.actor.apply_control(control)
-                # Arrival detection.
-                if self._ugv_basic_agent.done():
-                    self._ugv_basic_agent = None
+                if self._ugv_follower.done() and not self._ugv_arrived_announced:
                     self.event_log.add(
                         "ok", "SCENARIO", "UGV-01 arrived at destination",
                     )
+                    self._ugv_arrived_announced = True
+                    self._ugv_follower = None
             except Exception:
-                log.exception("S1: BasicAgent.run_step failed; clearing agent")
-                self._ugv_basic_agent = None
+                log.exception("S1: WaypointFollower.run_step failed; clearing")
+                self._ugv_follower = None
                 self.event_log.add(
-                    "danger", "SCENARIO", "UGV-01 navigation crashed; agent cleared",
+                    "danger", "SCENARIO",
+                    "UGV-01 follower crashed; cleared (UGV will coast)",
                 )
 
     # ---- on_command --------------------------------------------------
@@ -299,19 +342,12 @@ class S1FireScenario(Scenario):
         ugv = self.fleet.get(cmd.target)
         if not isinstance(ugv, CarlaActorMember):
             raise RejectCommand(f"UGV {cmd.target!r} not in fleet")
-        # Resolve destination. Spec wire format is {lat, lng}; for M6 we accept
-        # an internal {x, y} OR {fire_distance: float} from the SCRIPT.
         dest = self._resolve_ugv_destination(cmd.payload)
-        try:
-            agent = self._make_basic_agent(ugv.actor)
-            self._set_destination(agent, dest)
-        except Exception as e:
-            log.exception("S1: BasicAgent construction failed")
-            raise RejectCommand(f"BasicAgent setup failed: {e}") from e
-        self._ugv_basic_agent = agent
+        self._start_follower(ugv, dest)
         self.event_log.add(
             "info", "SCENARIO",
-            f"{cmd.target} DISPATCH → ({dest[0]:.1f}, {dest[1]:.1f}, {dest[2]:.1f})",
+            f"{cmd.target} DISPATCH → ({dest[0]:.1f}, {dest[1]:.1f}, {dest[2]:.1f}) "
+            f"[{self._ugv_follower.waypoint_count} waypoints]",
         )
 
     def _ugv_rtl(self, cmd: ParsedCommand) -> None:
@@ -321,17 +357,29 @@ class S1FireScenario(Scenario):
         if self._ugv_origin is None:
             raise RejectCommand("UGV origin not recorded")
         dest = (self._ugv_origin.x, self._ugv_origin.y, self._ugv_origin.z)
-        try:
-            agent = self._make_basic_agent(ugv.actor)
-            self._set_destination(agent, dest)
-        except Exception as e:
-            log.exception("S1: BasicAgent construction failed for RTL")
-            raise RejectCommand(f"BasicAgent setup failed: {e}") from e
-        self._ugv_basic_agent = agent
+        self._start_follower(ugv, dest)
         self.event_log.add(
             "info", "SCENARIO",
-            f"{cmd.target} RTL → ({dest[0]:.1f}, {dest[1]:.1f}, {dest[2]:.1f})",
+            f"{cmd.target} RTL → ({dest[0]:.1f}, {dest[1]:.1f}, {dest[2]:.1f}) "
+            f"[{self._ugv_follower.waypoint_count} waypoints]",
         )
+
+    def _start_follower(
+        self, ugv: CarlaActorMember, dest_xyz: tuple[float, float, float]
+    ) -> None:
+        """Construct a SimpleWaypointFollower and arm it. Resets arrival flag."""
+        follower = self._make_follower(ugv.actor)
+        try:
+            self._set_destination(follower, dest_xyz)
+        except Exception as e:
+            log.exception("S1: follower.set_destination failed")
+            raise RejectCommand(f"WaypointFollower set_destination failed: {e}") from e
+        self._ugv_follower = follower
+        self._ugv_arrived_announced = False
+
+    def _make_follower(self, ugv_actor) -> SimpleWaypointFollower:
+        """Indirection so tests can inject a fake follower."""
+        return SimpleWaypointFollower(ugv_actor)
 
     # ---- helpers ------------------------------------------------------
 
@@ -348,17 +396,16 @@ class S1FireScenario(Scenario):
         # Default: drive to the fire marker.
         return (ax + FIRE_DISTANCE, ay, az)
 
-    def _make_basic_agent(self, ugv_actor):
-        """Construct BasicAgent. Subclassed in tests to inject a fake."""
-        # Imported here so unit tests can monkeypatch without CARLA at import.
-        from agents.navigation.basic_agent import BasicAgent
-
-        return BasicAgent(ugv_actor, target_speed=UGV_TARGET_SPEED)
-
-    def _set_destination(self, agent, dest_xyz: tuple[float, float, float]) -> None:
+    def _set_destination(
+        self, follower: SimpleWaypointFollower, dest_xyz: tuple[float, float, float]
+    ) -> None:
+        """Configure the follower's destination. Splittable for testing."""
         import carla
 
-        agent.set_destination(carla.Location(x=dest_xyz[0], y=dest_xyz[1], z=dest_xyz[2]))
+        follower.set_destination(
+            self.world.carla_world,
+            carla.Location(x=dest_xyz[0], y=dest_xyz[1], z=dest_xyz[2]),
+        )
 
     # ---- spawn helpers ------------------------------------------------
 
@@ -416,16 +463,32 @@ class S1FireScenario(Scenario):
             return
         if ev.kind == "cmd":
             cmd_id = f"mock-{ev.at:05.1f}-{ev.target or 'any'}-{ev.text}"
-            payload = {
+            payload = self._materialize_payload(ev.payload or {})
+            await link.emit_command({
                 "id": cmd_id,
                 "target": ev.target,
                 "priority": ev.priority,
                 "text": ev.text,
-                "payload": ev.payload or {},
-            }
-            await link.emit_command(payload)
+                "payload": payload,
+            })
             return
         log.warning("mock script: unknown event kind %r", ev.kind)
+
+    def _materialize_payload(self, payload: dict) -> dict:
+        """Translate SCRIPT-only sugar keys into wire-protocol-valid payloads.
+
+        The SCRIPT is anchor-agnostic (anchor is only known at setup time), so
+        it uses logical references like `fire_distance`. The dispatcher (which
+        validates incoming wire payloads) only knows `{lat,lng}` or `{x,y}`,
+        so we resolve here before crossing the AgentLink boundary.
+        """
+        if "fire_distance" not in payload:
+            return payload
+        ax, ay, _ = self._anchor_world_xyz
+        out = {k: v for k, v in payload.items() if k != "fire_distance"}
+        out["x"] = ax + float(payload["fire_distance"])
+        out["y"] = ay
+        return out
 
 
 def _make_transform(*, x: float, y: float, z: float, yaw: float):
@@ -435,6 +498,16 @@ def _make_transform(*, x: float, y: float, z: float, yaw: float):
         carla.Location(x=x, y=y, z=z),
         carla.Rotation(yaw=yaw),
     )
+
+
+def _filter_existing(bp_lib, blueprint_ids):
+    """Yield blueprints whose id matches anything in `blueprint_ids`.
+
+    `bp_lib.find(id)` raises if not present, so we iterate matches via filter.
+    """
+    for bp_id in blueprint_ids:
+        for bp in bp_lib.filter(bp_id):
+            yield bp
 
 
 __all__ = ["S1FireScenario"]

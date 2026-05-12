@@ -256,6 +256,26 @@ def test_update_followers_skips_non_follower_modes():
     assert sensor.transforms == []
 
 
+def test_spawn_camera_signature_matches_spawner_protocol():
+    """Regression guard: SpawnerFn calls spawn_camera positionally with
+    (world, spec, queue, attach_to). If attach_to becomes keyword-only the
+    real-CARLA path breaks but FakeSpawner tests pass — so we check the sig
+    directly here.
+    """
+    import inspect
+
+    from carlabridge.sensors.camera import spawn_camera
+
+    sig = inspect.signature(spawn_camera)
+    params = list(sig.parameters.values())
+    # First 4 params must accept positional (POSITIONAL_OR_KEYWORD or POSITIONAL_ONLY).
+    for i, p in enumerate(params[:4]):
+        assert p.kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.POSITIONAL_ONLY,
+        ), f"param #{i} ({p.name}) must be positional, got {p.kind}"
+
+
 def test_detach_all_clears():
     spawner = FakeSpawner()
     mgr = CameraManager(spawner=spawner)

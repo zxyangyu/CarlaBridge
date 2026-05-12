@@ -5,9 +5,9 @@
 #     example: CARLABRIDGE_CARLA__HOST=192.168.1.10
 
 [carla]
-host = "127.0.0.1"
+host = "172.16.126.32"
 port = 2000
-timeout_s = 10.0
+timeout_s = 30.0
 fixed_delta_seconds = 0.0333    # 30 Hz
 map = "Town10HD_Opt"
 

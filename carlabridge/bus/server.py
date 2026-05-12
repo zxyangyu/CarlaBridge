@@ -94,6 +94,7 @@ def build_app(
     app["late"] = {"scenario_runner": None}
 
     app.router.add_get("/healthz", _healthz)
+    app.router.add_get("/debug/events", _debug_events)
     app.router.add_post("/admin/shutdown", _shutdown)
     app.router.add_post(
         "/webrtc/{camera_id}", signaling_route(camera_manager, event_log)
@@ -183,6 +184,15 @@ async def _healthz(request: web.Request) -> web.Response:
         ),
     }
     return web.json_response(payload)
+
+
+async def _debug_events(request: web.Request) -> web.Response:
+    """Dump the event_log ring buffer as JSON. Diagnostic only."""
+    event_log: EventLog = request.app["event_log"]
+    n = int(request.query.get("n", "200"))
+    return web.json_response(
+        {"events": [e.to_dict() for e in event_log.recent(n)]}
+    )
 
 
 async def _shutdown(request: web.Request) -> web.Response:

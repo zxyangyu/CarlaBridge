@@ -368,6 +368,7 @@ CarlaBridge 内部维护：
 | D6 | Socket.IO server 选型 | **怎么简单怎么来**，倾向 python-socketio + aiohttp/ASGI 单进程，与 aiortc 同事件循环 |
 | D7 | 鸟瞰摄像头实现 | **简单优先**，用 CARLA spectator 视角或固定高空相机，后期再调 |
 | D8 | 状态 / 视频录制回放 | **不需要** |
+| D9 | UGV 自动驾驶实现（M6 真机验收后追加） | **不用 CARLA `BasicAgent`**，改用工程内的 `SimpleWaypointFollower`。原因：BasicAgent 在 sync mode + 多路 camera 真机环境下，`bounding_box` 等属性 RPC 会出现 30s 级 timeout（孤立测试无问题）；推测是 camera listener 在 CARLA 内部线程持锁与 BasicAgent 的高频 RPC 累积冲突。Follower 走 GRP 一次性建路径 + 每 tick 仅 `get_transform/get_velocity/apply_control` 三个 RPC，已在真机跑通 80m 直线 (~13 sim 秒到达)。代价：无避障 / 不识红绿灯 / 不考虑车道偏移——本期演示可接受。 |
 
 ---
 

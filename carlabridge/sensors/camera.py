@@ -117,7 +117,6 @@ def spawn_camera(
     world: "carla.World",
     spec: CameraSpec,
     queue: FrameQueue,
-    *,
     attach_to: "carla.Actor | None" = None,
 ) -> SpawnedCamera:
     """Spawn a CARLA RGB camera and hook its listener to `queue`.

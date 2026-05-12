@@ -33,6 +33,7 @@ class FakeUgvActor:
     id: int = 1
     type_id: str = "vehicle.lincoln.mkz_2020"
     applied_controls: list = field(default_factory=list)
+    autopilot_calls: list = field(default_factory=list)
     destroyed: bool = False
 
     def get_transform(self):  # only consumed by Fleet.pose() in some paths
@@ -48,30 +49,37 @@ class FakeUgvActor:
     def apply_control(self, control) -> None:
         self.applied_controls.append(control)
 
+    def set_autopilot(self, enabled: bool) -> None:
+        self.autopilot_calls.append(enabled)
+
     def destroy(self) -> None:
         self.destroyed = True
 
 
-class FakeBasicAgent:
-    """Stand-in for agents.navigation.basic_agent.BasicAgent."""
+class FakeFollower:
+    """Stand-in for SimpleWaypointFollower."""
 
-    def __init__(self, actor, target_speed: float = 25.0) -> None:
+    def __init__(self, actor) -> None:
         self.actor = actor
-        self.target_speed = target_speed
         self.destination: Any | None = None
         self._steps = 0
         self._done_after = 999
+        self.waypoint_count = 0
 
-    def set_destination(self, location) -> None:
+    def set_destination(self, world, location) -> None:  # noqa: ARG002
         self.destination = (location.x, location.y, location.z)
+        self.waypoint_count = 5  # arbitrary, just non-zero
 
     def run_step(self):
         self._steps += 1
-        # Return a sentinel "control" object — the actor just records it.
         return ("ctrl", self._steps)
 
     def done(self) -> bool:
         return self._steps >= self._done_after
+
+    @property
+    def current_index(self) -> int:
+        return self._steps
 
 
 @dataclass
@@ -80,27 +88,25 @@ class FakeWorldFacade:
 
 
 class _HarnessS1Scenario(S1FireScenario):
-    """Wires fake BasicAgent + bypasses CARLA spawn so unit tests can run.
-
-    Setup is bypassed by the caller (we directly populate the fleet and origin
-    state). on_command + on_tick_post are exercised against this skeleton.
+    """Wires a fake follower so on_command + on_tick_post can be exercised
+    without CARLA. Setup is bypassed by the caller (we directly populate the
+    fleet and origin state in `_make_scenario_with_state`).
     """
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.fake_agents: list[FakeBasicAgent] = []
+        self.fake_followers: list[FakeFollower] = []
 
-    def _make_basic_agent(self, ugv_actor):
-        a = FakeBasicAgent(ugv_actor)
-        self.fake_agents.append(a)
-        return a
+    def _make_follower(self, ugv_actor) -> Any:
+        f = FakeFollower(ugv_actor)
+        self.fake_followers.append(f)
+        return f
 
-    def _set_destination(self, agent, dest_xyz):
-        # Bypass carla.Location wrapping — pass a tuple-like.
+    def _set_destination(self, follower, dest_xyz):
         class _Loc:
             x, y, z = dest_xyz
 
-        agent.set_destination(_Loc())
+        follower.set_destination(None, _Loc())
 
 
 # ---------- helpers -------------------------------------------------------
@@ -176,43 +182,40 @@ def test_uav_rtl_unknown_target_rejects():
 # ---------- UGV commands --------------------------------------------------
 
 
-def test_ugv_dispatch_creates_basic_agent_and_runs_step():
+def test_ugv_dispatch_creates_follower_with_destination():
     scen, _, actor = _make_scenario_with_state()
     cmd = ParsedCommand(
         id="c4", kind=CommandKind.UGV_DISPATCH, target="UGV-01",
         payload={"x": 100.0, "y": 50.0},
     )
     scen.on_command(cmd)
-    assert scen._ugv_basic_agent is not None
-    assert scen.fake_agents[0].destination == (100.0, 50.0, 0.0)
+    assert scen._ugv_follower is not None
+    assert scen.fake_followers[0].destination == (100.0, 50.0, 0.0)
 
-    # Tick post drives run_step + apply_control.
+
+def test_ugv_dispatch_tick_drives_apply_control():
+    scen, _, actor = _make_scenario_with_state()
+    scen.on_command(ParsedCommand(
+        id="c4a", kind=CommandKind.UGV_DISPATCH, target="UGV-01",
+        payload={"x": 100.0, "y": 50.0},
+    ))
     scen.on_tick_post(sim_time=0.1)
     assert len(actor.applied_controls) == 1
 
 
-def test_ugv_dispatch_with_fire_distance_payload():
+def test_ugv_arrival_announces_event_and_clears():
     scen, _, _ = _make_scenario_with_state()
-    cmd = ParsedCommand(
+    scen.on_command(ParsedCommand(
         id="c5", kind=CommandKind.UGV_DISPATCH, target="UGV-01",
-        payload={"fire_distance": 80.0},
-    )
-    scen.on_command(cmd)
-    # anchor x=0 + 80 → destination x=80
-    assert scen.fake_agents[0].destination[0] == 80.0
-
-
-def test_ugv_arrival_clears_basic_agent():
-    scen, _, actor = _make_scenario_with_state()
-    cmd = ParsedCommand(
-        id="c6", kind=CommandKind.UGV_DISPATCH, target="UGV-01",
         payload={"x": 50.0, "y": 0.0},
-    )
-    scen.on_command(cmd)
-    # Force done() True next step.
-    scen.fake_agents[0]._done_after = 1
+    ))
+    # Force done() to return True after one step.
+    scen.fake_followers[0]._done_after = 1
     scen.on_tick_post(sim_time=0.1)
-    assert scen._ugv_basic_agent is None  # cleared after done()
+    msgs = [e.message for e in scen.event_log.recent()]
+    assert any("arrived at destination" in m for m in msgs)
+    assert scen._ugv_follower is None
+    assert scen._ugv_arrived_announced is True
 
 
 def test_ugv_dispatch_unknown_target_rejects():
@@ -227,7 +230,18 @@ def test_ugv_dispatch_unknown_target_rejects():
 def test_ugv_rtl_uses_recorded_origin():
     scen, _, _ = _make_scenario_with_state()
     scen.on_command(ParsedCommand(id="c8", kind=CommandKind.UGV_RTL, target="UGV-01"))
-    assert scen.fake_agents[-1].destination == (0.0, 0.0, 0.0)
+    assert scen.fake_followers[0].destination == (0.0, 0.0, 0.0)
+    assert scen._ugv_follower is not None
+
+
+def test_ugv_teardown_clears_follower():
+    scen, _, _ = _make_scenario_with_state()
+    scen.on_command(ParsedCommand(
+        id="c9", kind=CommandKind.UGV_DISPATCH, target="UGV-01",
+        payload={"x": 100.0, "y": 50.0},
+    ))
+    scen.teardown()
+    assert scen._ugv_follower is None
 
 
 # ---------- MARK_EVENT / ATTACH_ACTOR --------------------------------

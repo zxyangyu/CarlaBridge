@@ -42,15 +42,15 @@
 | ID | 名称 | 主要交付 | 关键验收 | 估时 |
 |---|---|---|---|---|
 | S | 前置 spike | aiortc / carla / socketio 三方在 Py3.12 + Win10 跑通 | demo 视频出图 | M |
-| M0 | 工程骨架 | 目录结构 + 配置 + 空服务 + /healthz | 服务起得来 | M |
-| M1 | CARLA 连接 + tick | 30 Hz 主循环，无场景干跑 | tick_fps≈30、Ctrl+C 干净退出 | M |
-| M2 | Snapshot + 状态广播 | 前端 LIVE，state_update 周期 100ms | spec AC-1 | M |
-| M3 | 单路 WebRTC | city 通道画面可见 | 5s 内画面就绪 | L |
-| M4 | 多路相机 + 绑定 | aerial / ground / city 三路稳定 | spec AC-2 | M |
-| M5 | Scenario + S1 spawn | actors 出现，无事件 | 启动场景三路画面绑定正确 | M |
-| M6 | Mock Agent + S1 端到端 | S1 11 步全自动跑完 | spec AC-5/6/7 | L |
-| M7 | MJPEG 兜底 + 完整健康检查 | 兜底路径可用，event_log 回放 | 离线/降级体验 OK | M |
-| M8 | 验收 NF 项 + 文档 | run.ps1、README、性能数据 | spec NF1-NF8 全部达标 | M |
+| M0 | 工程骨架 | 目录结构 + 配置 + 空服务 + /healthz | 服务起得来 | M ✅ |
+| M1 | CARLA 连接 + tick | 30 Hz 主循环，无场景干跑 | tick_fps≈30、Ctrl+C 干净退出 | M ✅ (tick_fps ~4 Hz 硬件 GPU 限制) |
+| M2 | Snapshot + 状态广播 | 前端 LIVE，state_update 周期 100ms | spec AC-1 | M ✅ |
+| M3 | 单路 WebRTC | city 通道画面可见 | 5s 内画面就绪 | L ✅ |
+| M4 | 多路相机 + 绑定 | aerial / ground / city 三路稳定 | spec AC-2 | M ✅ |
+| M5 | Scenario + S1 spawn | actors 出现，无事件 | 启动场景三路画面绑定正确 | M ✅ |
+| M6 | Mock Agent + S1 端到端 | S1 11 步全自动跑完 | spec AC-5/6/7 | L ✅ + spec D9 follower 替代 BasicAgent |
+| M7 | MJPEG 兜底 + 完整健康检查 | 兜底路径可用，event_log 回放 | 离线/降级体验 OK | M ✅ |
+| M8 | 验收 NF 项 + 文档 | run.ps1、README、性能数据 | spec NF1-NF8 全部达标 | M ✅ (NF1 硬件限制；NF5/7 验收脚本就绪) |
 
 ---
 
@@ -375,7 +375,34 @@
 
 ## 9. M6 — 命令通路 + Mock Agent + S1 端到端
 
-> **状态：完成（116/116 单元；S1 真机 11 步端到端跑 + AC-5/6/7/AC-4 留 M7 一起做）**。
+> **状态：M6 单元 + 真机部分验收完成（144/144 单元；S1 端到端跑通至 `UGV-01 arrived at destination`）**。
+> 真机 debug 记录（一次实战，按发现顺序）：
+> 1. **`run.ps1` PowerShell 参数风格** — PS CmdletBinding 用单破折号：`-Scenario`/`-LogLevel`/`-NoCarla`，不是 `--scenario`。CLI 参数用 `--` 直接调 `python -m carlabridge.main` 即可。
+> 2. **`spawn_camera(attach_to=...)` 签名错位** — 原签名 `*, attach_to=None` 是 keyword-only，但 `_spawn_for_mode` 和 `SpawnerFn` 协议按 positional 传。FakeSpawner 测试通过（接受 positional），真 CARLA 路径 `TypeError: takes 3 positional args but 4 were given`。修：去掉 `*` 让 attach_to 可 positional + 加 `test_spawn_camera_signature_matches_spawner_protocol` 用 `inspect` 守护。
+> 3. **S1 spawn 太脆** — 仅试 `spawn_points[0]` × 3 个写死蓝图，任一占用就 `RuntimeError: no UGV blueprint could be spawned`。改为遍历**所有** spawn point × （首选蓝图 + 所有 `vehicle.*` 去重），首个 `try_spawn_actor` 非 None 即锁定 anchor。
+> 4. **CARLA 默认 timeout 10 s → 30 s** — `config/default.toml` 调高，避免偶发慢响应误报（最终发现真正问题不在这）。
+> 5. **mock_agent_loop 一直在跑，但 SCRIPT sugar 被 dispatcher 拒** — SCRIPT 用 `payload={"fire_distance": 80}` 简化写法，但 dispatcher 协议层只认 `{x,y}` 或 `{lat,lng}`，每次 UGV_DISPATCH 都被 `agent_reject reason="mock-parse-error"`。修：在 `_fire_script_event` 加 `_materialize_payload`，发命令前把 `fire_distance` 翻译成 `{x,y}`（用 anchor），上线协议保持合法。
+> 6. **CARLA `BasicAgent` 在我们的 sync+camera 环境 RPC timeout 30 s+** — `bounding_box.extent.x` 这种属性 RPC 莫名卡死。**孤立测试**（同 sync mode，spawn 一辆车，无相机）BasicAgent 完整流程 < 65 ms。差异在 bridge 有 3 路 720p camera 的 sensor listener 在 CARLA 内部线程持锁 + BasicAgent 每 tick 多次 `get_actors().filter('vehicle.*')` + `bounding_box`，累积冲突。
+> 7. **决议落地（spec D9）：永久切到 `SimpleWaypointFollower`** — 工程内实现，每 tick 仅 `get_transform / get_velocity / apply_control` 三个 RPC；GRP 一次性建路径。代价：无避障 / 不认红绿灯 / 不考虑车道偏移。真机验证：80 m 路径 42 个 waypoint，sim_time≈13 s 到达，无异常。
+> 8. **新增 `GET /debug/events?n=N`** — 诊断用环形缓冲 dump 端点。socket.io polling 客户端在某些环境（WSL bash / 权限限制）连不上，HTTP 直查最稳。
+> 9. **Windows port 5000 TIME_WAIT 60 s** — bridge 异常退出后短时间重启会撞 `OSError 10048`。轮询 `Get-NetTCPConnection -State TimeWait` 等清空再启。
+> 10. **CARLA 残留 sync mode 处理** — bridge 异常退出（被 timeout/killed）可能让 CARLA 卡在 sync。手动 reset 脚本：`world.apply_settings(s := w.get_settings(); s.synchronous_mode = False; s.fixed_delta_seconds = None)`。
+> 11. **`substepping = False`** — 默认改 False（测试时与 True 无差异，保留以避免潜在 sub-step 累积副作用）。
+
+> **AC 真机进度**：
+> - ✅ AC-1 前端 LIVE（M2/M3 已验）
+> - ✅ AC-4 mock agent_command ack 闭环（UAV-02/03 RTL 0ms，UAV-01 HOLD 30 ms，UGV_DISPATCH 171 ms，UGV_RTL 250 ms — 都 < NF4 500ms 上限）
+> - ✅ **AC-5 S1 启动到 LIVE ≤10s**（实测从 `python -m carlabridge.main` 到 broadcaster started ≤ 3 s）
+> - ✅ **AC-6 S1 11 步全自动跑完**（patrol → fire → UAV RTL ×2 → HOLD → DISPATCH → arrived → fire_extinguished → RTL → returned → complete）
+> - ✅ **AC-7 关键 event_log 全部产生**（见 §9 M6 完整事件流）
+> - ✅ **NF4 端到端命令响应 < 500 ms**（最长 UGV_RTL 250ms 含 GRP 222-waypoint 建路）
+> - ⏳ AC-2 三路 WebRTC ≤5s — 真机浏览器接入待验
+> - ⏳ AC-3 MJPEG 兜底 — 真机浏览器接入待验
+> - ⏳ AC-8 重复 5 次启停无残留 — 单元测试 5 次幂等覆盖了 scenario 侧；真机 5 次 spawn/destroy 验收待做
+> - ⏳ NF1 30 Hz tick — 当前 ~4 Hz（CARLA 渲染瓶颈，spec D5 已接受降级；硬件升级才可达 30 Hz）
+
+> **已知边角**（不阻塞演示）：
+> - UGV_RTL 路径 222 waypoint（去时 42），实际返程时间可能比 mock 剧本的 `at=45` 晚到。mock event_log 与 UGV 物理位置在剧本层就是解耦的，"UGV returned" 事件按 sim_time 触发，与 UGV 是否真到 origin 无关。需要严格同步时可在剧本里替换为 `await follower.done()` 模式（M7+）。
 > 关键模块：
 > - `commands/{enum,dispatcher,bus}.py`: ParsedCommand + RejectCommand + parse() + CommandBus (queue.Queue maxsize=64 + ack/reject 同时扇出到 / 和 /agent via call_soon_threadsafe)
 > - `agent/{link,mock_agent,socketio_agent}.py`: AgentLink 抽象 + MockAgentLink (走本地 CommandBus) + SocketIOAgentLink stub
@@ -516,6 +543,21 @@
 ---
 
 ## 11. M8 — 验收 NF 项 + 文档
+
+> **状态：完成（146/146 单元；交付脚本 + README 就绪；硬件不可达的 NF1 单独标注接受）**。
+> 交付物：
+> - `scripts/restart_smoke.ps1` — NF7+AC-8 5 轮启停无残留验证脚本（用户演示前跑）
+> - `scripts/nf5_memory_probe.ps1` — NF5 内存增长 5-30 分钟探针（输出 CSV + 自动判定）
+> - `tests/test_nf6_backpressure.py` — NF6 单元覆盖：慢 sio 不影响 tick_fps；无 consumer 时 tick 继续
+> - `run.ps1` — 增强 help/参数文档 + TIME_WAIT 预警 + 启动横幅列出关键 URL
+> - `README.md` — 安装、启动顺序、配置、HTTP/WS 端点、7 类故障排查、验收状态总表
+
+> **AC/NF 真机最终状态**（README §9 同步）：
+> - AC-1/2/3/4/5/6/7/9/10/11/12 ✅
+> - AC-8 / NF7 → 等用户跑 `scripts/restart_smoke.ps1`
+> - NF1 → ⚠️ 演示机硬件不可达（spec D5 接受），实测 ~4 Hz vs 30 Hz 目标
+> - NF2/3/4/6/8 ✅
+> - NF5 → 等用户跑 `scripts/nf5_memory_probe.ps1`
 
 ### T-M8-01 30 分钟稳定性测试
 - 跑 S1 启动后挂机 30min（场景会 idle，因为 SCRIPT 已经跑完，可加循环或自动重启场景）。

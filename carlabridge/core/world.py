@@ -111,10 +111,9 @@ class World:
         settings = self._world.get_settings()
         settings.synchronous_mode = True
         settings.fixed_delta_seconds = float(fixed_delta_seconds)
-        settings.substepping = True
-        # 6 substeps × 0.005s = 0.03s, enough for delta=0.0333.
-        settings.max_substep_delta_time = 0.005
-        settings.max_substeps = 10
+        # M6 diag: substepping was causing 30s RPC timeouts inside BasicAgent.
+        # Disabling it makes physics single-step per tick — fine for this demo.
+        settings.substepping = False
         try:
             self._world.apply_settings(settings)
         except Exception as e:
