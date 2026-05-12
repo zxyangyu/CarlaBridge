@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from carlabridge.bus.projector import FocusBinding, for_agent, for_frontend
 from carlabridge.core.atomic import AtomicRef
 from carlabridge.core.snapshot import WorldSnapshot
+from carlabridge.obs.event_log import Event, EventLog
 from carlabridge.obs.metrics import Metrics
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -34,6 +35,7 @@ class Broadcaster:
         snapshot_ref: AtomicRef[WorldSnapshot],
         focus: FocusBinding,
         metrics: Metrics,
+        event_log: EventLog | None = None,
         state_hz: float = 10.0,
         metrics_hz: float = 1.0,
     ) -> None:
@@ -43,10 +45,13 @@ class Broadcaster:
         self._snap_ref = snapshot_ref
         self._focus = focus
         self._metrics = metrics
+        self._event_log = event_log
         self._state_period = 1.0 / state_hz
         self._metrics_period = 1.0 / metrics_hz
         self._task_state: asyncio.Task | None = None
         self._task_metrics: asyncio.Task | None = None
+        self._unsubscribe_event_log: "callable | None" = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     # ---- lifecycle ----------------------------------------------------
 
@@ -54,15 +59,26 @@ class Broadcaster:
         if self._task_state is not None:
             raise RuntimeError("Broadcaster already started")
         loop = asyncio.get_running_loop()
+        self._loop = loop
         self._task_state = loop.create_task(self._state_loop(), name="broadcaster-state")
         self._task_metrics = loop.create_task(self._metrics_loop(), name="broadcaster-metrics")
+        # Subscribe to EventLog so new events fan out immediately (rather
+        # than waiting up to 100 ms for the next state broadcast tick).
+        if self._event_log is not None:
+            self._unsubscribe_event_log = self._event_log.subscribe(
+                self._on_event_log
+            )
         log.info(
-            "broadcaster started (state=%.1fHz metrics=%.1fHz)",
+            "broadcaster started (state=%.1fHz metrics=%.1fHz event_log=%s)",
             1.0 / self._state_period,
             1.0 / self._metrics_period,
+            "subscribed" if self._event_log is not None else "unsubscribed",
         )
 
     async def stop(self) -> None:
+        if self._unsubscribe_event_log is not None:
+            self._unsubscribe_event_log()
+            self._unsubscribe_event_log = None
         for t in (self._task_state, self._task_metrics):
             if t is None:
                 continue
@@ -107,6 +123,37 @@ class Broadcaster:
                 raise
             except Exception:
                 log.exception("state broadcaster iteration crashed")
+
+    # ---- event_log fan-out -------------------------------------------
+
+    def _on_event_log(self, evt: Event) -> None:
+        """Listener called from whatever thread fires EventLog.add.
+
+        We must schedule the emit onto the asyncio loop — listeners may be
+        invoked from the sim thread, sensor threads, etc.
+        """
+        if self._loop is None:
+            return
+        payload = {"severity": evt.severity, "source": evt.source, "message": evt.message}
+        try:
+            self._loop.call_soon_threadsafe(
+                self._sio.start_background_task,
+                self._emit_event_async,
+                payload,
+            )
+        except RuntimeError:
+            # Loop closing during shutdown — drop the event.
+            pass
+
+    async def _emit_event_async(self, payload: dict) -> None:
+        try:
+            await asyncio.gather(
+                self._sio.emit("event_log", payload, namespace="/"),
+                self._sio.emit("event_log", payload, namespace="/agent"),
+                return_exceptions=True,
+            )
+        except Exception:  # pragma: no cover -- best-effort
+            log.exception("event_log emit failed")
 
     async def _metrics_loop(self) -> None:
         period = self._metrics_period

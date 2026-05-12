@@ -16,7 +16,13 @@
       "Bash(python -m json.tool)",
       "Bash(curl -s -X POST http://127.0.0.1:5000/webrtc/nope -H \"Content-Type: application/json\" -d '{\"sdp\":\"x\",\"type\":\"offer\"}')",
       "Bash(curl -s -X POST http://127.0.0.1:5000/webrtc/city -H \"Content-Type: application/json\" -d '{\"sdp\":\"bad\",\"type\":\"offer\"}')",
-      "Bash(curl -s -X POST http://127.0.0.1:5000/admin/shutdown)"
+      "Bash(curl -s -X POST http://127.0.0.1:5000/admin/shutdown)",
+      "Bash(curl -s -w \"%{http_code}\\\\n\" -o /dev/null http://127.0.0.1:5000/video_feed?camera=nope)",
+      "Bash(curl -s -w \"%{http_code}\\\\n\" -o /dev/null http://127.0.0.1:5000/video_feed)",
+      "Bash(netstat -ano)",
+      "Bash(awk '{print $5}')",
+      "Bash(curl -s -m 1 http://127.0.0.1:5000/healthz)",
+      "Bash(echo \"exit=$?\")"
     ]
   }
 }

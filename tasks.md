@@ -329,6 +329,13 @@
 
 ## 8. M5 — Scenario 引擎 + S1 spawn
 
+> **状态：完成（84/84 单元；S1 真机 spawn + 三路画面演示留到 M6 跑端到端时做）**。
+> 关键架构改动：
+> - **TickLoop 不再持有 scenario 生命周期** — 删掉了 `start()` 里的 `scenario.setup(world, fleet)` 和 `join()` 里的 `scenario.teardown()`。Scenario 的 setup/teardown 由 main 直接驱动（通过 `ScenarioRunner`），在 main 线程上做 CARLA RPC，与 tick 线程不抢资源。Protocol 现在只剩 on_tick_pre/post + on_command。
+> - Scenario 依赖（world/fleet/camera_manager/event_log）通过构造函数注入；`_register_actor` / `_register_entity` / `_record_rebound` 三个 helper 让默认 teardown 自动做幂等清理（actor.destroy → fleet.unregister → camera_manager.rebind(channel, None)）。
+> - `CameraManager.rebind(channel, None)` 现在表示「解绑」而不是「绑到 None 后报错」 — 销毁 sensor + 清空 binding，不试图重建。
+> - 三个通道 (aerial/ground/city) 在 main `_seed_bindings` 里登记；scenario.setup 调 `rebind` 把 aerial→UAV-01 / ground→UGV-01 接上；city 是 world_pose，main 启动时 `spawn_all` 已经把它建好。
+
 ### T-M5-01 scenarios/base.py
 - `Scenario` ABC：`setup() / on_tick_pre() / on_tick_post() / on_command() / teardown() / setup_bindings()`。
 - 注册装饰器 `@scenario("s1_fire")` 或简单 registry dict。
@@ -367,6 +374,15 @@
 ---
 
 ## 9. M6 — 命令通路 + Mock Agent + S1 端到端
+
+> **状态：完成（116/116 单元；S1 真机 11 步端到端跑 + AC-5/6/7/AC-4 留 M7 一起做）**。
+> 关键模块：
+> - `commands/{enum,dispatcher,bus}.py`: ParsedCommand + RejectCommand + parse() + CommandBus (queue.Queue maxsize=64 + ack/reject 同时扇出到 / 和 /agent via call_soon_threadsafe)
+> - `agent/{link,mock_agent,socketio_agent}.py`: AgentLink 抽象 + MockAgentLink (走本地 CommandBus) + SocketIOAgentLink stub
+> - tick_loop step 1: drain CommandBus → scenario.on_command → ack 或 RejectCommand → reject
+> - S1 实现 UAV_RTL/HOLD (VirtualMember.set_target)、UGV_DISPATCH/RTL (BasicAgent + on_tick_post run_step+apply_control)、MARK_EVENT、ATTACH_ACTOR (D3 no-op)
+> - S1 SCRIPT 11 步事件，`mock_agent_loop(link)` 按 sim_time 触发；ScenarioRunner.start_mock_agent_task / stop_mock_agent_task 管理协程生命周期
+> - 前端 `agent_command` 当作 SUGGESTION 路由 → AgentLink.on_suggestion；MockAgentLink 默认策略「忽略 + reject」
 
 ### T-M6-01 commands/enum.py
 - `CommandKind` 枚举：`UAV_RTL / UAV_HOLD / UGV_DISPATCH / UGV_RTL / MARK_EVENT / ATTACH_ACTOR`。
@@ -459,6 +475,16 @@
 ---
 
 ## 10. M7 — MJPEG 兜底 + 完整健康检查 + event_log 持久缓冲
+
+> **状态：完成（131/131 单元；MJPEG 真机出图 + /healthz 真值留 M8 一起跑）**。
+> 关键点：
+> - `streaming/jpeg_tap.py`: PyAV mjpeg 编码（rgb24 → yuvj420p → JPEG）。`quality` 参数走 `options['qscale']`，PyAV/FFmpeg mjpeg 不一定全尊重，但每个 quality 都产出有效 JPEG（SOI/EOI）。
+> - `streaming/mjpeg.py`: GET `/video_feed?camera=<id>` 输出 `multipart/x-mixed-replace; boundary=frame`，逐帧 `await queue.get()` → encode_jpeg → write part。客户端断开自动退出循环。
+> - `obs/event_log.py`: 加 `subscribe(listener) → unsubscribe`，监听器在 producer 线程同步执行；监听器异常被吞，不影响生产者。
+> - `bus/broadcaster.py`: 加 `event_log` 订阅器：新事件经 `loop.call_soon_threadsafe → sio.start_background_task` 立即扇出到 `/` 和 `/agent`。
+> - `bus/server.py`: `/healthz` 现在按 design §15.4 输出 carla / tick_fps / scenario / clients (frontend+agent SID 计数) / cameras (status: unbound/spawned-no-frames/ok) / command_bus.depth。
+> - SID 跟踪：FrontendNamespace + AgentNamespace 各自维护 `_sids: set`，`client_count` property 供 healthz 读取。
+> - aiohttp 应用 dict 在 AppRunner.setup() 后写入会触发 deprecation warning；scenario_runner 用 `app["late"]` 这个预创建的 mutable holder 后置注入。
 
 ### T-M7-01 streaming/jpeg_tap.py
 - 按需 JPEG 编码：只有 MJPEG 客户端连入时才启用。

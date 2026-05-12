@@ -13,18 +13,30 @@ import logging
 import socketio
 from aiohttp import web
 
+from carlabridge.agent.link import AgentLink
 from carlabridge.bus.agent_ns import AgentNamespace
 from carlabridge.bus.frontend_ns import FrontendNamespace
 from carlabridge.bus.projector import FocusBinding
+from carlabridge.commands.bus import CommandBus
 from carlabridge.config import Settings
 from carlabridge.core.atomic import AtomicRef
 from carlabridge.core.snapshot import WorldSnapshot
 from carlabridge.obs.event_log import EventLog
 from carlabridge.obs.metrics import Metrics
 from carlabridge.sensors.camera import CameraManager
+from carlabridge.streaming.mjpeg import mjpeg_route
 from carlabridge.streaming.webrtc import signaling_route
 
 log = logging.getLogger(__name__)
+
+
+def make_sio(settings: Settings) -> socketio.AsyncServer:
+    """Standalone SocketIO server construction so callers can wire bus/link
+    BEFORE namespaces register their event handlers."""
+    return socketio.AsyncServer(
+        async_mode="aiohttp",
+        cors_allowed_origins=_cors_origins(settings.server.cors_origins),
+    )
 
 
 def build_app(
@@ -32,30 +44,34 @@ def build_app(
     event_log: EventLog,
     metrics: Metrics,
     *,
+    sio: socketio.AsyncServer,
     snapshot_ref: AtomicRef[WorldSnapshot],
     focus: FocusBinding,
     camera_manager: CameraManager,
+    command_bus: CommandBus | None = None,
+    agent_link: AgentLink | None = None,
     shutdown_event: "asyncio.Event | None" = None,
 ) -> tuple[web.Application, socketio.AsyncServer]:
-    """Build the aiohttp app with Socket.IO attached. Caller runs it.
+    """Build the aiohttp app with the (already-constructed) Socket.IO server
+    attached and namespaces registered.
 
     If `shutdown_event` is provided, exposes `POST /admin/shutdown` that sets it.
-    Used for graceful programmatic shutdown (testing + ops).
     """
-    sio = socketio.AsyncServer(
-        async_mode="aiohttp",
-        cors_allowed_origins=_cors_origins(settings.server.cors_origins),
-        # Pings are critical for Win10 stability; defaults are fine for now.
+    frontend_ns = FrontendNamespace(
+        "/",
+        event_log=event_log,
+        snapshot_ref=snapshot_ref,
+        focus=focus,
+        agent_link=agent_link,
     )
-
-    sio.register_namespace(
-        FrontendNamespace(
-            "/", event_log=event_log, snapshot_ref=snapshot_ref, focus=focus
-        )
+    agent_ns = AgentNamespace(
+        "/agent",
+        event_log=event_log,
+        snapshot_ref=snapshot_ref,
+        command_bus=command_bus,
     )
-    sio.register_namespace(
-        AgentNamespace("/agent", event_log=event_log, snapshot_ref=snapshot_ref)
-    )
+    sio.register_namespace(frontend_ns)
+    sio.register_namespace(agent_ns)
 
     app = web.Application()
     sio.attach(app)
@@ -67,13 +83,22 @@ def build_app(
     app["snapshot_ref"] = snapshot_ref
     app["focus"] = focus
     app["camera_manager"] = camera_manager
+    app["command_bus"] = command_bus
+    app["agent_link"] = agent_link
+    app["frontend_ns"] = frontend_ns
+    app["agent_ns"] = agent_ns
     app["shutdown_event"] = shutdown_event
+    # Mutable holder for late-bound dependencies (scenario_runner constructed
+    # AFTER build_app in main). aiohttp deprecates writing new keys after
+    # AppRunner.setup() — we mutate this dict instead.
+    app["late"] = {"scenario_runner": None}
 
     app.router.add_get("/healthz", _healthz)
     app.router.add_post("/admin/shutdown", _shutdown)
     app.router.add_post(
         "/webrtc/{camera_id}", signaling_route(camera_manager, event_log)
     )
+    app.router.add_get("/video_feed", mjpeg_route(camera_manager))
 
     return app, sio
 
@@ -86,22 +111,60 @@ def _cors_origins(origins: list[str]) -> str | list[str]:
 
 
 async def _healthz(request: web.Request) -> web.Response:
-    """M0 placeholder. M7 expands to carla / tick_fps / scenario / clients / cameras."""
+    """Full health endpoint (design §15.4)."""
     settings: Settings = request.app["settings"]
     metrics: Metrics = request.app["metrics"]
     snap_ref: AtomicRef[WorldSnapshot] = request.app["snapshot_ref"]
     cam_mgr: CameraManager = request.app["camera_manager"]
+    frontend_ns: FrontendNamespace = request.app["frontend_ns"]
+    agent_ns: AgentNamespace = request.app["agent_ns"]
+    command_bus: CommandBus | None = request.app["command_bus"]
+    scenario_runner = request.app["late"].get("scenario_runner")
     snap = snap_ref.get()
+    m = metrics.snapshot()
+
+    # CARLA reachability is inferred from snapshot freshness — a snapshot
+    # exists iff the tick loop is running, which implies a live RPC link.
+    carla_state = "connected" if snap is not None else "disconnected"
+
+    # Scenario state: "idle" / "running" / "stopped" / "failed" + name.
+    if scenario_runner is None:
+        scenario_state = "none/idle"
+    else:
+        scenario_state = f"{scenario_runner.name}/{scenario_runner.state}"
+
+    # Per-channel camera health: ok if (a) spawned, (b) producing frames
+    # (produced > consumed at least once in the last sample window — proxy:
+    # produced > 0).
+    cameras_health: dict[str, dict] = {}
+    for cid, q in cam_mgr.queues.items():
+        spawned = cid in cam_mgr.cameras
+        if not spawned:
+            status = "unbound"
+        elif q.produced == 0:
+            status = "spawned-no-frames"
+        else:
+            status = "ok"
+        cameras_health[cid] = {"status": status, **q.stats()}
+
     payload = {
         "status": "alive",
         "version": "0.1.0",
+        "carla": carla_state,
+        "tick_fps": m.get("tick_fps", 0),
+        "scenario": scenario_state,
+        "clients": {
+            "frontend": frontend_ns.client_count,
+            "agent": agent_ns.client_count,
+        },
+        "cameras": cameras_health,
         "config": {
             "carla_map": settings.carla.map,
             "tick_hz": round(1.0 / settings.carla.fixed_delta_seconds, 1),
             "agent_mode": settings.agent.mode,
             "scenario_default": settings.scenario.default,
         },
-        "metrics": metrics.snapshot(),
+        "metrics": m,
         "snapshot": {
             "available": snap is not None,
             "sim_time": snap.sim_time if snap is not None else None,
@@ -115,10 +178,9 @@ async def _healthz(request: web.Request) -> web.Response:
                 else None
             ),
         },
-        "cameras": {
-            cid: {"spawned": cid in cam_mgr.cameras, **q.stats()}
-            for cid, q in cam_mgr.queues.items()
-        },
+        "command_bus": (
+            {"depth": command_bus.depth()} if command_bus is not None else None
+        ),
     }
     return web.json_response(payload)
 

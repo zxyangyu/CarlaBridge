@@ -373,6 +373,14 @@ class CameraManager:
             except Exception:
                 log.exception("rebind: detach of old %s sensor failed", channel_id)
 
+        # Unbinding (new_entity_id is None): leave the channel without a camera.
+        # Teardown uses this path.
+        if new_entity_id is None:
+            log.info(
+                "camera %s unbound (was %s)", channel_id, binding.attach_entity_id
+            )
+            return None
+
         try:
             new_cam = self._spawn_one(world, fleet, new_binding)
             log.info(

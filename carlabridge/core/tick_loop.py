@@ -25,6 +25,7 @@ import threading
 import time
 from typing import TYPE_CHECKING, Protocol
 
+from carlabridge.commands.enum import RejectCommand
 from carlabridge.core.atomic import AtomicRef
 from carlabridge.core.clock import SimClock
 from carlabridge.core.fleet import Fleet
@@ -33,6 +34,7 @@ from carlabridge.obs.event_log import EventLog
 from carlabridge.obs.metrics import Metrics
 
 if TYPE_CHECKING:  # pragma: no cover
+    from carlabridge.commands.bus import CommandBus
     from carlabridge.sensors.camera import CameraManager
 
 log = logging.getLogger(__name__)
@@ -70,24 +72,25 @@ class WorldLike(Protocol):
 
 
 class Scenario(Protocol):
-    """Sim-domain hooks. All methods called from the tick thread."""
+    """Sim-domain hooks. All methods called from the tick thread.
+
+    `setup` / `teardown` are NOT called by TickLoop — the lifecycle owner
+    (`ScenarioRunner` driven from main) runs them on the main thread before
+    and after the tick thread, so they can do CARLA RPCs (spawn_actor, etc.)
+    without competing with `world.tick()`.
+    """
 
     name: str
 
-    def setup(self, world: WorldLike, fleet: Fleet) -> None: ...
     def on_tick_pre(self, sim_time: float) -> None: ...
     def on_tick_post(self, sim_time: float) -> None: ...
     def on_command(self, cmd: object) -> None: ...
-    def teardown(self) -> None: ...
 
 
 class NoopScenario:
-    """Placeholder for M1. Real scenarios land in M5+."""
+    """No-op fallback (used for --no-carla mode or when no scenario picked)."""
 
     name = "noop"
-
-    def setup(self, world: WorldLike, fleet: Fleet) -> None:
-        pass
 
     def on_tick_pre(self, sim_time: float) -> None:
         pass
@@ -96,9 +99,6 @@ class NoopScenario:
         pass
 
     def on_command(self, cmd: object) -> None:
-        pass
-
-    def teardown(self) -> None:
         pass
 
 
@@ -121,6 +121,7 @@ class TickLoop:
         snapshot_builder: SnapshotBuilder | None = None,
         snapshot_ref: AtomicRef[WorldSnapshot] | None = None,
         camera_manager: "CameraManager | None" = None,
+        command_bus: "CommandBus | None" = None,
         behind_warn_threshold: float = 1.5,
     ) -> None:
         self._world = world
@@ -132,6 +133,7 @@ class TickLoop:
         self._snapshot_builder = snapshot_builder
         self._snapshot_ref = snapshot_ref
         self._camera_manager = camera_manager
+        self._command_bus = command_bus
         self._behind_warn_threshold = behind_warn_threshold
 
         self._shutdown = threading.Event()
@@ -146,7 +148,6 @@ class TickLoop:
     def start(self) -> None:
         if self._thread is not None:
             raise RuntimeError("TickLoop already started")
-        self._scenario.setup(self._world, self._fleet)
         self._clock.start()
         self._fps_window_start = time.monotonic()
         self._fps_window_count = 0
@@ -165,11 +166,6 @@ class TickLoop:
             if self._thread.is_alive():
                 log.warning("tick thread did not exit within %.1fs", timeout or 0)
             self._thread = None
-        # Tear down scenario regardless of thread state.
-        try:
-            self._scenario.teardown()
-        except Exception:  # pragma: no cover -- best-effort
-            log.exception("scenario teardown raised")
 
     @property
     def is_running(self) -> bool:
@@ -198,7 +194,24 @@ class TickLoop:
                          self._clock.sim_time, self._clock.tick_count)
 
     def _one_iteration(self) -> None:
-        # 1. drain commands — M6 fills this; M1 keeps it a no-op.
+        # 1. drain commands → scenario.on_command, ack/reject through CommandBus
+        if self._command_bus is not None:
+            for cmd in self._command_bus.drain():
+                try:
+                    self._scenario.on_command(cmd)
+                except RejectCommand as r:
+                    self._command_bus.reject(
+                        cmd.id, target=cmd.target, reason=str(r)
+                    )
+                except Exception as e:
+                    log.exception("scenario.on_command raised")
+                    self._command_bus.reject(
+                        cmd.id,
+                        target=cmd.target,
+                        reason=f"scenario error: {type(e).__name__}: {e}",
+                    )
+                else:
+                    self._command_bus.ack(cmd.id, target=cmd.target)
         # 2. pre-tick scenario hook
         self._scenario.on_tick_pre(self._clock.sim_time)
         # 3. advance CARLA one step

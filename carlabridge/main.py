@@ -4,6 +4,9 @@ M0: HTTP + Socket.IO skeleton.
 M1: + CARLA connection, sync mode, tick thread (NoopScenario placeholder).
 M2: + WorldSnapshot atomic ref + 10Hz broadcaster (state_update / state_snapshot).
 M3: + city camera (world_pose) + WebRTC signaling (POST /webrtc/{camera_id}).
+M4: + aerial/ground bindings + hot rebind.
+M5: + Scenario engine + S1 actor spawn.
+M6: + CommandBus + AgentLink + mock_agent_loop (end-to-end S1).
 
 Usage:
     python -m carlabridge.main [--config PATH] [--scenario NAME] [--log-level LVL]
@@ -20,9 +23,12 @@ from pathlib import Path
 
 from aiohttp import web
 
+from carlabridge.agent.mock_agent import MockAgentLink
+from carlabridge.agent.socketio_agent import SocketIOAgentLink
 from carlabridge.bus.broadcaster import Broadcaster
 from carlabridge.bus.projector import FocusBinding
-from carlabridge.bus.server import build_app
+from carlabridge.bus.server import build_app, make_sio
+from carlabridge.commands.bus import CommandBus
 from carlabridge.config import Settings, load_settings
 from carlabridge.core.atomic import AtomicRef
 from carlabridge.core.clock import SimClock
@@ -32,6 +38,9 @@ from carlabridge.core.tick_loop import NoopScenario, TickLoop
 from carlabridge.core.world import BridgeFatal, World
 from carlabridge.obs.event_log import EventLog
 from carlabridge.obs.metrics import Metrics
+# Importing the scenarios package triggers @register_scenario side effects.
+from carlabridge.scenarios import available_scenarios, get_scenario_class  # noqa: F401
+from carlabridge.scenarios.runner import ScenarioRunner
 from carlabridge.sensors.camera import CameraBinding, CameraManager, CameraSpec
 from carlabridge.streaming.webrtc import shutdown_peer_connections
 
@@ -116,6 +125,7 @@ async def _run(settings: Settings, *, no_carla: bool) -> int:
     tick_loop: TickLoop | None = None
     runner: web.AppRunner | None = None
     broadcaster: Broadcaster | None = None
+    scenario_runner: ScenarioRunner | None = None
     exit_code = 0
 
     try:
@@ -142,15 +152,25 @@ async def _run(settings: Settings, *, no_carla: bool) -> int:
             log.warning("--no-carla: HTTP/Socket.IO only, no tick loop")
             event_log.add("warn", "BRIDGE", "started in --no-carla mode")
 
-        # ---------- 2. HTTP + Socket.IO ---------------------------------
+        # ---------- 2. HTTP + Socket.IO + CommandBus + AgentLink --------
         stop_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        sio = make_sio(settings)
+        command_bus = CommandBus(loop=loop, sio=sio, event_log=event_log)
+        if settings.agent.mode == "remote":
+            agent_link = SocketIOAgentLink(sio=sio, event_log=event_log)
+        else:
+            agent_link = MockAgentLink(command_bus=command_bus, event_log=event_log)
         app, sio = build_app(
             settings,
             event_log,
             metrics,
+            sio=sio,
             snapshot_ref=snapshot_ref,
             focus=focus,
             camera_manager=camera_manager,
+            command_bus=command_bus,
+            agent_link=agent_link,
             shutdown_event=stop_event,
         )
         runner = web.AppRunner(app)
@@ -187,12 +207,15 @@ async def _run(settings: Settings, *, no_carla: bool) -> int:
             f"http listening on {settings.server.host}:{settings.server.port}",
         )
 
-        # ---------- 3. bind frame queues to loop + spawn cameras --------
+        # ---------- 3. bind frame queues to loop + spawn city camera ----
         # Bind all known queues to the running loop before any producer fires.
         for q in camera_manager.queues.values():
             q.bind_loop()
         if world is not None:
             try:
+                # Spawns city (world_pose) immediately; aerial/ground are
+                # skipped here because their attach_entity_id is still None.
+                # The scenario fills them in below via `rebind`.
                 camera_manager.spawn_all(world.carla_world, fleet)
                 for cid in camera_manager.cameras:
                     event_log.add("ok", "CARLA", f"camera {cid} spawned")
@@ -200,36 +223,77 @@ async def _run(settings: Settings, *, no_carla: bool) -> int:
                 log.exception("camera spawn_all failed")
                 event_log.add("danger", "CARLA", f"camera spawn_all failed: {e}")
 
-        # ---------- 4. tick thread + snapshot builder (NoopScenario) ----
+        # ---------- 4. scenario setup (spawns UGV + virtual UAVs +
+        #                              fire marker + rebinds aerial/ground)
+        scenario = NoopScenario()
         if world is not None:
+            try:
+                scenario_cls = get_scenario_class(settings.scenario.default)
+            except KeyError as e:
+                log.error("scenario lookup failed: %s", e)
+                event_log.add("danger", "SCENARIO", f"unknown scenario: {e}")
+                return 4
             clock = SimClock(delta=settings.carla.fixed_delta_seconds)
+            scenario_runner = ScenarioRunner(
+                scenario_cls,
+                world=world,
+                fleet=fleet,
+                camera_manager=camera_manager,
+                event_log=event_log,
+                sim_time_provider=lambda c=clock: c.sim_time,
+            )
+            try:
+                scenario = scenario_runner.start()
+            except Exception as e:
+                log.exception("scenario setup failed")
+                event_log.add(
+                    "danger", "SCENARIO", f"setup failed: {type(e).__name__}: {e}"
+                )
+                return 5
+
+        # ---------- 5. tick thread --------------------------------------
+        if world is not None:
             snapshot_builder = SnapshotBuilder(world=world.carla_world)
             tick_loop = TickLoop(
                 world=world,
                 clock=clock,
                 fleet=fleet,
-                scenario=NoopScenario(),
+                scenario=scenario,
                 metrics=metrics,
                 event_log=event_log,
                 snapshot_builder=snapshot_builder,
                 snapshot_ref=snapshot_ref,
                 camera_manager=camera_manager,
+                command_bus=command_bus,
             )
             tick_loop.start()
-            event_log.add("ok", "BRIDGE", "tick loop running (NoopScenario)")
+            event_log.add(
+                "ok", "BRIDGE", f"tick loop running (scenario={scenario.name})"
+            )
 
-        # ---------- 5. broadcaster --------------------------------------
+            # Start the scenario's mock_agent_loop coroutine (no-op if the
+            # scenario doesn't define one or if agent.mode != "mock").
+            if settings.agent.mode == "mock" and scenario_runner is not None:
+                task = scenario_runner.start_mock_agent_task(agent_link)
+                if task is not None:
+                    event_log.add("ok", "AGENT", "mock_agent_loop started")
+
+        # ---------- 6. broadcaster --------------------------------------
         broadcaster = Broadcaster(
             sio=sio,
             snapshot_ref=snapshot_ref,
             focus=focus,
             metrics=metrics,
+            event_log=event_log,
             state_hz=settings.broadcast.state_hz,
             metrics_hz=settings.broadcast.metrics_hz,
         )
         broadcaster.start()
+        # Stash the scenario_runner for /healthz (None ok). Mutating the
+        # pre-created `late` dict avoids aiohttp's post-freeze write warning.
+        app["late"]["scenario_runner"] = scenario_runner
 
-        # ---------- 6. wait for shutdown --------------------------------
+        # ---------- 7. wait for shutdown --------------------------------
         loop = asyncio.get_running_loop()
 
         def _request_stop() -> None:
@@ -249,26 +313,38 @@ async def _run(settings: Settings, *, no_carla: bool) -> int:
             _request_stop()
     finally:
         event_log.add("warn", "BRIDGE", "shutting down")
-        # 7a. stop broadcaster before HTTP teardown
+        # 8a. cancel mock_agent_loop FIRST so it can't fire any more commands
+        if scenario_runner is not None:
+            try:
+                await scenario_runner.stop_mock_agent_task()
+            except Exception:
+                log.exception("stop_mock_agent_task failed")
+        # 8b. stop broadcaster before HTTP teardown
         if broadcaster is not None:
             await broadcaster.stop()
-        # 7b. close all WebRTC peer connections (also drains encoder tasks)
+        # 8c. close all WebRTC peer connections (also drains encoder tasks)
         await shutdown_peer_connections()
-        # 7c. stop tick thread BEFORE restoring CARLA (no ticks during restore)
+        # 8d. stop tick thread BEFORE restoring CARLA (no ticks during restore)
         if tick_loop is not None:
             log.info("stopping tick loop…")
             tick_loop.stop()
             tick_loop.join(timeout=3.0)
-        # 7d. detach CARLA cameras BEFORE restoring async mode (cameras are
-        #     CARLA actors; in async mode their listener semantics change)
+        # 8e. scenario teardown (destroys spawned actors + unbinds cameras).
+        #     Runs BEFORE camera detach_all so unbind can detach cleanly.
+        if scenario_runner is not None:
+            try:
+                scenario_runner.stop()
+            except Exception:
+                log.exception("scenario_runner.stop() failed")
+        # 8f. detach CARLA camera sensors BEFORE restoring async mode
         try:
             camera_manager.detach_all()
         except Exception:
             log.exception("camera detach_all failed")
-        # 7e. drain HTTP / Socket.IO
+        # 8g. drain HTTP / Socket.IO
         if runner is not None:
             await runner.cleanup()
-        # 7f. restore CARLA async mode + disconnect (CRITICAL — runs even
+        # 8h. restore CARLA async mode + disconnect (CRITICAL — runs even
         #     if startup failed after switch_to_sync)
         if world is not None:
             try:

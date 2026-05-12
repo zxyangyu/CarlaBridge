@@ -34,11 +34,6 @@ class RecordingScenario:
     def __init__(self):
         self.pre_calls = 0
         self.post_calls = 0
-        self.setup_called = False
-        self.teardown_called = False
-
-    def setup(self, world, fleet):
-        self.setup_called = True
 
     def on_tick_pre(self, sim_time):
         self.pre_calls += 1
@@ -48,9 +43,6 @@ class RecordingScenario:
 
     def on_command(self, cmd):
         pass
-
-    def teardown(self):
-        self.teardown_called = True
 
 
 def _make_loop(tick_cost: float = 0.0, scenario=None, delta: float = 0.0333):
@@ -77,14 +69,14 @@ def test_tick_loop_paces_to_target_hz():
 
 
 def test_tick_loop_calls_scenario_hooks():
+    """tick_loop drives on_tick_pre/post each iteration; setup/teardown are
+    explicitly NOT its responsibility (M5: ScenarioRunner owns those)."""
     scen = RecordingScenario()
     loop = _make_loop(tick_cost=0.001, scenario=scen, delta=1 / 60)
     loop.start()
     time.sleep(0.3)
     loop.stop()
     loop.join()
-    assert scen.setup_called
-    assert scen.teardown_called
     assert scen.pre_calls > 5
     assert scen.pre_calls == scen.post_calls
 
