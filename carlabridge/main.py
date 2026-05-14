@@ -72,7 +72,7 @@ def _seed_bindings(camera_manager: CameraManager) -> None:
     # city: world_pose high overhead, Town10HD-friendly z=200, pitch -90°
     camera_manager.bind(CameraBinding(spec=CameraSpec(
         id="city", mode="world_pose",
-        x=0.0, y=0.0, z=200.0,
+        x=0.0, y=40.0, z=200.0,
         pitch=-90.0, yaw=0.0, roll=0.0,
         fov=90.0, width=1280, height=720, fps=25,
     )))
@@ -80,8 +80,8 @@ def _seed_bindings(camera_manager: CameraManager) -> None:
     camera_manager.bind(CameraBinding(spec=CameraSpec(
         id="aerial", mode="follows_virtual",
         # Offset relative to UAV's world pose (M4 uses world-frame offset).
-        x=0.0, y=0.0, z=20.0,
-        pitch=-30.0, yaw=0.0, roll=0.0,
+        x=0.0, y=0.0, z=10.0,
+        pitch=-50.0, yaw=0.0, roll=0.0,
         fov=90.0, width=1280, height=720, fps=25,
         attach_entity_id=None,  # scenario fills this in
     )))

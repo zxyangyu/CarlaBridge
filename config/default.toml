@@ -5,7 +5,7 @@
 #     example: CARLABRIDGE_CARLA__HOST=192.168.1.10
 
 [carla]
-host = "172.16.126.32"
+host = "127.0.0.1"
 port = 2000
 timeout_s = 30.0
 fixed_delta_seconds = 0.0333    # 30 Hz

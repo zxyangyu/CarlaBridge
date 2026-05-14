@@ -20,13 +20,36 @@
 | 项 | 值 | 备注 |
 |---|---|---|
 | OS | Windows 10 | (Linux 未验证；Win 多媒体定时器 + CARLA Python API 兼容) |
-| Python | 3.12 | 锁定，由 CARLA wheel 决定 |
-| Conda env | `D:/carla/env` | 绝对路径锁死；CARLA 0.9.16 wheel 已装 |
+| Python | 3.12 | 锁定，由 CARLA 官方 wheel 的 cp312 版本决定 |
+| Conda env | 仓库根目录 `.venv` | 前缀环境：`conda create -p ".\.venv"`，见 **§2.1** |
 | CARLA | 0.9.16 | `CarlaUE4.exe` 在外部启动，默认 `127.0.0.1:2000` |
 | 默认地图 | `Town10HD_Opt` | 启动时自动 load |
 | 前端 | `D:/urban_frontend` | vite dev，需先 `npm install` |
 
-依赖列在 `pyproject.toml` 里：`aiohttp / python-socketio / aiortc / av / numpy / pydantic-settings / psutil / shapely / networkx` 等。`carla` 本身从 CARLA 自带 wheel 装，不在 PyPI。
+依赖列在 `pyproject.toml` 里：`aiohttp / python-socketio / aiortc / av / numpy / pydantic-settings / psutil / shapely / networkx` 等。`carla` **不在 PyPI**，必须从 CARLA 安装目录自带的 **cp312 Windows wheel** 安装（见 **§2.1**）。
+
+### 2.1 Conda 环境与依赖安装
+
+在 **仓库根目录**（与 `pyproject.toml` 同级）执行：
+
+```powershell
+conda create -p ".\.venv" python=3.12 -y
+conda activate ".\.venv"
+pip install -e .[dev]
+pip install "E:\Program Files\CARLA_0.9.16\PythonAPI\carla\dist\carla-0.9.16-cp312-cp312-win_amd64.whl"
+```
+
+说明：
+
+- **_wheel 路径**：请按本机 CARLA 安装位置修改（一般在 `PythonAPI\carla\dist\` 下，文件名需与 Python 3.12 / win_amd64 一致）。
+- **路径含空格**：若仓库或 CARLA 在 `Program Files` 等目录下，conda 可能提示路径含空格；安装后务必 **`conda activate` 再运行**，减少脚本/工具解析路径的问题。
+- **CARLA `agents`（BasicAgent 等）**：`carlabridge` 会把 `CARLA_AGENTS_ROOT`（若未设置则默认 `D:/carla/PythonAPI/carla`）加入 `sys.path`。若 CARLA 不在默认盘符路径，请在启动前设置，例如：
+
+  ```powershell
+  $env:CARLA_AGENTS_ROOT = "E:\Program Files\CARLA_0.9.16\PythonAPI\carla"
+  ```
+
+- **`run.ps1`**：若脚本里 `$PythonExe` 仍指向旧的固定路径，请改为本仓库下的 `.\.venv\python.exe`（或 `(Join-Path $RepoRoot '.venv\python.exe')`），与上述环境一致。
 
 ## 3. 启动流程（演示路径）
 
@@ -34,15 +57,18 @@
 
 ### 3.1 CARLA 服务器
 
+将 `<CARLA_ROOT>` 换成你的安装目录（示例：`E:\Program Files\CARLA_0.9.16`）：
+
 ```cmd
-D:\carla\CarlaUE4.exe -quality-level=Low -ResX=1280 -ResY=720
+"<CARLA_ROOT>\CarlaUE4.exe" -quality-level=Low -ResX=1280 -ResY=720
 ```
 （建议 Low quality 以避免 CARLA 渲染线程拖慢 tick；详见故障 §6.1）
 
 ### 3.2 Bridge
 
 ```powershell
-cd D:\CarlaBridge
+cd "E:\Program Files\CarlaBridge"   # 换成你的仓库路径
+conda activate ".\.venv"            # 若 run.ps1 已指向 .\.venv\python.exe 可省略
 .\run.ps1 -Scenario s1_fire
 ```
 就绪标志：
@@ -201,7 +227,11 @@ WebRTC 需先用一次 MJPEG 验证连通性，然后切到 WEBRTC 模式输 `ht
 ### 7.1 测试
 
 ```powershell
-D:/carla/env/python.exe -m pytest tests/ -q
+# 已 conda activate ".\.venv"：
+python -m pytest tests/ -q
+
+# 或未激活时直接指定解释器：
+.\.venv\python.exe -m pytest tests/ -q
 ```
 146 个单元测试，全部不需要 CARLA，~16 秒跑完。
 

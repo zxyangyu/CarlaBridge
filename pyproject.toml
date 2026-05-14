@@ -24,12 +24,30 @@ dependencies = [
     # Required by CARLA's bundled BasicAgent (D:/carla/PythonAPI/carla/agents).
     "shapely>=2.0",
     "networkx>=3.0",
+    # From CARLA PythonAPI/carla/requirements.txt
+    "distro>=1.9",
+    "packaging",
+    # From CARLA PythonAPI/examples/requirements.txt
+    "future",
+    "pygame>=2.0",
+    "matplotlib>=3.0",
+    "open3d",
+    "Pillow>=9.0",
+    # From CARLA PythonAPI/util/requirements.txt
+    "py-cpuinfo",
+    "GPUtil",
+    "python-tr",
+    "imageio",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7",
     "pytest-asyncio>=0.23",
+]
+carla-examples = [
+    # invertedai requires Python >=3.10 and is installed from git
+    "invertedai @ git+https://github.com/inverted-ai/invertedai.git@develop ; python_version >= '3.10'",
 ]
 
 [project.scripts]

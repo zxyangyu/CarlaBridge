@@ -49,7 +49,11 @@
       "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'tick_fps={d[\\\\\"tick_fps\\\\\"]:.2f} sim_time={d[\\\\\"snapshot\\\\\"][\\\\\"sim_time\\\\\"]:.2f} cmd_depth={d[\\\\\"command_bus\\\\\"][\\\\\"depth\\\\\"]}'\\)\")",
       "Bash(curl -s -m 3 \"http://127.0.0.1:5000/debug/events?n=500\")",
       "Bash(powershell.exe -NoProfile -Command \"& { . D:\\\\CarlaBridge\\\\scripts\\\\restart_smoke.ps1; exit 0 } -Iterations 1\")",
-      "Bash(powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"[scriptblock]::Create\\(\\(Get-Content D:\\\\CarlaBridge\\\\scripts\\\\restart_smoke.ps1 -Raw\\)\\)\")"
+      "Bash(powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"[scriptblock]::Create\\(\\(Get-Content D:\\\\CarlaBridge\\\\scripts\\\\restart_smoke.ps1 -Raw\\)\\)\")",
+      "Bash(powershell.exe *)",
+      "Bash(./.venv/python.exe -m pytest tests/test_waypoint_follower.py tests/test_s1_command.py -x --tb=short)",
+      "Bash(./.venv/python.exe -c \"from carlabridge.scenarios.waypoint_follower import SimpleWaypointFollower; print\\('import ok'\\); print\\('has set_destination:', hasattr\\(SimpleWaypointFollower, 'set_destination'\\)\\)\")",
+      "Bash(./.venv/python.exe -m pytest tests/ -q)"
     ]
   }
 }

@@ -40,7 +40,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$PythonExe = "D:/carla/env/python.exe"
+$PythonExe = "./.venv/python.exe"
+$env:CARLA_AGENTS_ROOT = "E:\Program Files\CARLA_0.9.16\PythonAPI\carla"
 
 if (-not (Test-Path $PythonExe)) {
     Write-Error @"

@@ -15,7 +15,7 @@ from pathlib import Path
 
 __version__ = "0.1.0"
 
-_DEFAULT_AGENTS_ROOT = Path("D:/carla/PythonAPI/carla")
+_DEFAULT_AGENTS_ROOT = Path("E:/Program Files/CARLA_0.9.16/PythonAPI/carla")
 _AGENTS_ROOT = Path(os.environ.get("CARLA_AGENTS_ROOT", _DEFAULT_AGENTS_ROOT))
 
 if _AGENTS_ROOT.is_dir() and str(_AGENTS_ROOT) not in sys.path:

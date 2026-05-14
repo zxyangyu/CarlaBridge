@@ -45,15 +45,25 @@ UGV_BLUEPRINT_CANDIDATES = (
 )
 
 FIRE_MARKER_BLUEPRINTS = (
-    "static.prop.streetbarrier",
-    "static.prop.constructioncone",
-    "static.prop.warningconstruction",
+    "vehicle.carlamotors.firetruck",
+    "vehicle.ford.ambulance",
+    "static.prop.kiosk_01",
 )
 
-UAV_ALTITUDE = 60.0       # meters above the anchor
+UAV_ALTITUDE = 10.0       # meters above the anchor
 UAV_SPREAD = 20.0         # horizontal spread between UAVs (meters)
-FIRE_DISTANCE = 80.0      # UGV → fire marker offset along +x (meters)
+FIRE_DISTANCE = 90.0      # UGV → fire marker offset along +x (meters)
 UGV_TARGET_SPEED = 25.0   # km/h passed to BasicAgent
+
+# UAV-01 stopping distance short of the fire to keep it in the -30 pitch camera view
+UAV01_STOP_OFFSET = 10.0  
+
+# UAV-01 carries the AERIAL camera. Give it a single straight-line target to
+# fire-overhead so the feed has motion. Cruise speed is back-computed from the
+# distance (formation_center → target) and the desired arrival time,
+# which matches UAV_HOLD in _SCRIPT. urban-agent (next milestone) replaces this.
+UAV01_ARRIVAL_S = 18.0
+UAV01_CRUISE_SPEED = (FIRE_DISTANCE - UAV01_STOP_OFFSET + UAV_SPREAD) / UAV01_ARRIVAL_S  # ~5.56 m/s
 
 # Polling interval for sim_time → wall_time gating inside mock_agent_loop.
 SCRIPT_TICK_S = 0.05
@@ -80,26 +90,28 @@ class ScriptEvent:
 _SCRIPT: list[ScriptEvent] = [
     ScriptEvent(at=4.0, kind="event_log", severity="info",
                 message="patrol started — three UAVs airborne"),
-    ScriptEvent(at=6.0, kind="event_log", severity="warn",
-                message="detected fire @ anchor +80m east"),
-    ScriptEvent(at=7.0, kind="cmd", target="UAV-02", text="UAV_RTL",
+    ScriptEvent(at=10.0, kind="event_log", severity="warn",
+                message="simulated fire emergency (large bright target) starts on the road"),
+    ScriptEvent(at=16.0, kind="event_log", severity="warn",
+                message="detected fire target @ anchor +90m east"),
+    ScriptEvent(at=17.0, kind="cmd", target="UAV-02", text="UAV_RTL",
                 priority="high"),
-    ScriptEvent(at=7.0, kind="cmd", target="UAV-03", text="UAV_RTL",
+    ScriptEvent(at=17.0, kind="cmd", target="UAV-03", text="UAV_RTL",
                 priority="high"),
-    ScriptEvent(at=8.0, kind="cmd", target="UAV-01", text="UAV_HOLD",
+    ScriptEvent(at=18.0, kind="cmd", target="UAV-01", text="UAV_HOLD",
                 priority="high"),
-    ScriptEvent(at=9.0, kind="cmd", target="UGV-01", text="UGV_DISPATCH",
+    ScriptEvent(at=19.0, kind="cmd", target="UGV-01", text="UGV_DISPATCH",
                 priority="urgent",
                 payload={"fire_distance": FIRE_DISTANCE}),
-    ScriptEvent(at=25.0, kind="event_log", severity="ok",
+    ScriptEvent(at=35.0, kind="event_log", severity="ok",
                 message="UGV arrived (mock: timed)"),
-    ScriptEvent(at=27.0, kind="event_log", severity="ok",
+    ScriptEvent(at=37.0, kind="event_log", severity="ok",
                 message="fire extinguished (D3: no robotic action — event only)"),
-    ScriptEvent(at=29.0, kind="cmd", target="UGV-01", text="UGV_RTL",
+    ScriptEvent(at=47.0, kind="cmd", target="UGV-01", text="UGV_RTL",
                 priority="normal"),
-    ScriptEvent(at=45.0, kind="event_log", severity="ok",
+    ScriptEvent(at=63.0, kind="event_log", severity="ok",
                 message="UGV returned"),
-    ScriptEvent(at=46.0, kind="event_log", severity="ok",
+    ScriptEvent(at=64.0, kind="event_log", severity="ok",
                 message="scenario complete"),
 ]
 
@@ -121,6 +133,8 @@ class S1FireScenario(Scenario):
         self._anchor_yaw: float = 0.0
         # UAV origin poses for RTL.
         self._uav_origins: dict[str, Pose] = {}
+        self._fire_spawned = False
+        self._fire_actor = None
         # Script timing: scenario start sim_time, captured at start of
         # mock_agent_loop (NOT at setup) so the timer starts when the loop
         # actually begins.
@@ -225,19 +239,16 @@ class S1FireScenario(Scenario):
             f"3 virtual UAVs registered at altitude {UAV_ALTITUDE}m",
         )
 
-        # ---- fire marker (D4: anchor only) ----------------------------
-        fire_transform = _make_transform(
-            x=ax + FIRE_DISTANCE, y=ay, z=az + 0.5, yaw=anchor.rotation.yaw,
-        )
-        fire_actor = self._spawn_first_available(
-            FIRE_MARKER_BLUEPRINTS, fire_transform, kind="fire_marker"
-        )
-        if fire_actor is not None:
-            self._register_actor(fire_actor)
-            self.event_log.add(
-                "warn", "SCENARIO",
-                f"fire marker placed at ({fire_transform.location.x:.1f}, "
-                f"{fire_transform.location.y:.1f}) — D4 visual anchor only",
+        # AERIAL motion: UAV-01 flies straight to an offset from the fire. Arrival
+        # coincides with UAV_HOLD (t≈8s in _SCRIPT), so HOLD just confirms it.
+        uav01 = self.fleet.get("UAV-01")
+        if isinstance(uav01, VirtualMember):
+            uav01.set_target(
+                Pose(
+                    x=ax + FIRE_DISTANCE - UAV01_STOP_OFFSET, y=ay, z=az + UAV_ALTITUDE,
+                    yaw=anchor.rotation.yaw,
+                ),
+                cruise_speed=UAV01_CRUISE_SPEED,
             )
 
         # ---- bind cameras --------------------------------------------
@@ -259,9 +270,33 @@ class S1FireScenario(Scenario):
         self._ugv_follower = None
         super().teardown()
 
+    def _spawn_fire(self) -> None:
+        if self._fire_spawned:
+            return
+        ax, ay, az = self._anchor_world_xyz
+        fire_transform = _make_transform(
+            x=ax + FIRE_DISTANCE, y=ay, z=az + 0.5, yaw=self._anchor_yaw,
+        )
+        fire_actor = self._spawn_first_available(
+            FIRE_MARKER_BLUEPRINTS, fire_transform, kind="fire_marker"
+        )
+        if fire_actor is not None:
+            self._register_actor(fire_actor)
+            self._fire_actor = fire_actor
+            self._fire_spawned = True
+            self.event_log.add(
+                "warn", "SCENARIO",
+                f"fire marker placed at ({fire_transform.location.x:.1f}, "
+                f"{fire_transform.location.y:.1f}) — D4 visual anchor only",
+            )
+
     # ---- per-tick hooks ----------------------------------------------
 
     def on_tick_post(self, sim_time: float) -> None:
+        if self._script_start_sim is not None and not self._fire_spawned:
+            if sim_time - self._script_start_sim >= 10.0:
+                self._spawn_fire()
+                
         # Advance virtual UAV motion (lerp toward their `target`, if any).
         dt = 1.0 / 30.0
         for uav in self.fleet.virtual():
@@ -388,13 +423,14 @@ class S1FireScenario(Scenario):
         if "x" in payload and "y" in payload:
             return (float(payload["x"]), float(payload["y"]), float(payload.get("z", az)))
         if "fire_distance" in payload:
-            return (ax + float(payload["fire_distance"]), ay, az)
+            # Stop slightly before the fire and to the side (right lane) to avoid collision
+            return (ax + float(payload["fire_distance"]) - 4.0, ay + 3.0, az)
         if "lat" in payload and "lng" in payload:
             # M6 doesn't yet do CARLA geo → world. Treat as world coords as
             # a placeholder; M7 wires `get_map().get_geo_location()`.
             return (float(payload["lat"]), float(payload["lng"]), az)
         # Default: drive to the fire marker.
-        return (ax + FIRE_DISTANCE, ay, az)
+        return (ax + FIRE_DISTANCE - 4.0, ay + 3.0, az)
 
     def _set_destination(
         self, follower: SimpleWaypointFollower, dest_xyz: tuple[float, float, float]
@@ -441,28 +477,94 @@ class S1FireScenario(Scenario):
             sim_time = lambda: 0.0  # noqa: E731
         else:
             sim_time = self._sim_time_provider
-        self._script_start_sim = sim_time()
-        self.event_log.add(
-            "info", "AGENT", f"mock agent started @ sim_time={self._script_start_sim:.2f}",
-        )
+            
+        while True:
+            self._script_start_sim = sim_time()
+            self.event_log.add(
+                "info", "AGENT", f"mock agent started @ sim_time={self._script_start_sim:.2f}",
+            )
 
-        for ev in _SCRIPT:
-            target_sim = self._script_start_sim + ev.at
+            for ev in _SCRIPT:
+                target_sim = self._script_start_sim + ev.at
+                while sim_time() < target_sim:
+                    await asyncio.sleep(SCRIPT_TICK_S)
+                try:
+                    await self._fire_script_event(link, ev)
+                except Exception:
+                    log.exception("mock_agent_loop: event at=%s failed", ev.at)
+
+            self.event_log.add("ok", "AGENT", "mock agent script complete. Restarting in 5s...")
+            
+            target_sim = sim_time() + 5.0
             while sim_time() < target_sim:
                 await asyncio.sleep(SCRIPT_TICK_S)
-            try:
-                await self._fire_script_event(link, ev)
-            except Exception:
-                log.exception("mock_agent_loop: event at=%s failed", ev.at)
 
-        self.event_log.add("ok", "AGENT", "mock agent script complete")
+            self._reset_scenario()
+
+    def _reset_scenario(self) -> None:
+        """Reset scenario state to allow the mock script to run again."""
+        import carla
+
+        # 1. Reset UGV to start immediately
+        ugv = self.fleet.get("UGV-01")
+        if isinstance(ugv, CarlaActorMember) and self._ugv_origin is not None:
+            tf = carla.Transform(
+                carla.Location(
+                    x=self._ugv_origin.x, 
+                    y=self._ugv_origin.y, 
+                    z=self._ugv_origin.z + 0.5  # slight lift to prevent falling through map
+                ),
+                carla.Rotation(yaw=self._ugv_origin.yaw)
+            )
+            ugv.actor.set_target_velocity(carla.Vector3D(0, 0, 0))
+            ugv.actor.set_target_angular_velocity(carla.Vector3D(0, 0, 0))
+            control = carla.VehicleControl(steer=0.0, throttle=0.0, brake=1.0, hand_brake=False)
+            ugv.actor.apply_control(control)
+            ugv.actor.set_transform(tf)
+            
+        self._ugv_arrived_announced = False
+        self._ugv_follower = None
+
+        # 2. Reset virtual UAVs to their origins
+        for eid, origin in self._uav_origins.items():
+            uav = self.fleet.get(eid)
+            if isinstance(uav, VirtualMember):
+                uav.set_pose(origin)
+                uav.set_target(None)
+                uav.battery = 100.0
+
+        # 3. Destroy fire marker
+        if self._fire_spawned and self._fire_actor is not None:
+            try:
+                self._fire_actor.destroy()
+            except Exception:
+                log.exception("Failed to destroy fire marker")
+            if self._fire_actor in self._spawned_actors:
+                self._spawned_actors.remove(self._fire_actor)
+            self._fire_spawned = False
+            self._fire_actor = None
+
+        # 4. Trigger UAV-01 aerial motion again (same as setup)
+        ax, ay, az = self._anchor_world_xyz
+        uav01 = self.fleet.get("UAV-01")
+        if isinstance(uav01, VirtualMember):
+            uav01.set_target(
+                Pose(
+                    x=ax + FIRE_DISTANCE - UAV01_STOP_OFFSET, y=ay, z=az + UAV_ALTITUDE,
+                    yaw=self._anchor_yaw,
+                ),
+                cruise_speed=UAV01_CRUISE_SPEED,
+            )
+            
+        self.event_log.add("info", "SCENARIO", "Scenario state reset for next loop.")
 
     async def _fire_script_event(self, link: "AgentLink", ev: ScriptEvent) -> None:
         if ev.kind == "event_log":
             await link.emit_event_log(ev.severity, "AGENT", ev.message)
             return
         if ev.kind == "cmd":
-            cmd_id = f"mock-{ev.at:05.1f}-{ev.target or 'any'}-{ev.text}"
+            run_id = int(self._script_start_sim) if self._script_start_sim is not None else 0
+            cmd_id = f"mock-{run_id}-{ev.at:05.1f}-{ev.target or 'any'}-{ev.text}"
             payload = self._materialize_payload(ev.payload or {})
             await link.emit_command({
                 "id": cmd_id,
@@ -486,8 +588,9 @@ class S1FireScenario(Scenario):
             return payload
         ax, ay, _ = self._anchor_world_xyz
         out = {k: v for k, v in payload.items() if k != "fire_distance"}
-        out["x"] = ax + float(payload["fire_distance"])
-        out["y"] = ay
+        # Stop slightly before the fire and offset y to bypass the large object
+        out["x"] = ax + float(payload["fire_distance"]) - 4.0
+        out["y"] = ay + 3.0
         return out
 
 
