@@ -408,16 +408,90 @@
 
 ---
 
+## 11.5. R11 — 协议 v1.0 envelope 合规（2026-05-16 增量）
+
+> 上游：`bridge-agent-protocol-v1.md` v1.0（线契约）。R1~R10 已实现协议**语义**，R11 补齐**线层**:envelope 包裹 + hello version + 入站双形态容忍。
+
+### T-R11-01 新增 envelope 助手 `carlabridge/bus/envelope.py`
+- `PROTOCOL_VERSION = "1.0"`
+- `wrap(event_type, payload, *, sim_time, frame, sender="bridge") -> dict`：构造协议 §3.1 envelope 8 字段
+- `unwrap(data) -> dict`：兼容 envelope 与裸 dict 入站（§3.2）；None / 非 dict 返回 `{}`
+- **DoD**：`tests/test_envelope.py` 覆盖 wrap 字段完整性 + unwrap 三形态（envelope / 裸 / 非 dict）
+- **依赖**：无
+- **估时**：S（已完成）
+
+### T-R11-02 `bus/agent_ns.py` 出入站合规
+- `on_hello` 返回值补 `"version": "1.0"`（协议 §2.2）
+- `on_hello` / `on_agent_command` / `on_event_log` 入口 `unwrap(payload)` 容忍两形态
+- `on_connect` 首帧 `state_snapshot` 出站包 envelope
+- `broadcast_command_status` / `broadcast_scenario_event` 出站包 envelope
+- 命令 RPC ack（accepted / rejected）**保持简单 dict**（协议 §5.1.2 RPC ack 不包 envelope）
+- **DoD**：`tests/test_agent_command_rpc.py` 断言 hello.version；`tests/test_broadcast.py` 断言 command_status / scenario_event 外层 envelope 字段
+- **依赖**：T-R11-01
+- **估时**：S（已完成）
+
+### T-R11-03 `bus/broadcaster.py` 周期出站合规
+- `_state_loop`：`/agent` 的 `state_snapshot` 包 envelope，`/`(前端) 保持裸 frontend payload
+- `_emit_event_async`：`/agent` 的 `event_log` 包 envelope，`/` 保持裸
+- 注入 envelope.frame：snapshot.frame ← SimClock.tick_count（`core/snapshot.py` 加 `frame: int` 字段；`core/tick_loop.py` 注入）。frame **不进** snapshot payload（协议 §4.1.1 只在 envelope）
+- **DoD**：`tests/test_broadcaster.py` 断言 `/agent` 首条 emit 外层 `version/type/sender/sim_time` 字段、内层 `payload.sim_time`；`tests/test_event_broadcast.py` 断言 `/` 仍裸、`/agent` 已 envelope
+- **依赖**：T-R11-01
+- **估时**：S（已完成）
+
+### T-R11-04 `test_agent.py` 参考客户端合规
+- 出站 `agent.command` 构造 §3.1 envelope（含 sender=agent）
+- 所有入站 handler 入口 `_unwrap(data)` 兼容（未来 Bridge 退回裸形态时仍可工作）
+- `hello` 入参补 `version: "1.0"`，校验 ack 返回的 major version 不匹配则警告（协议 §11.1）
+- **DoD**：`tests/test_test_agent_smoke.py` 通过；CARLA 联跑 patrol/fire/extinguish 链路完整
+- **依赖**：T-R11-02、T-R11-03
+- **估时**：S（已完成）
+
+### T-R11-05 已有测试对 envelope 形态的适配
+- `test_broadcast.py` / `test_reset_cancel_chain.py` / `test_instant_commands.py`：socket.io 客户端 `@on(...)` handler 入口扁平化 `payload["payload"]`
+- `test_broadcaster.py` / `test_event_broadcast.py`：FakeSio 录到的 `/agent` 出站直接断言外层 envelope 字段
+- `test_agent_command_rpc.py`：hello ack 加 `version == "1.0"` 断言
+- **DoD**：`pytest tests/ -q` 全绿（除预存在的 `test_config` 漂移已单独修，见 T-R11-06）
+- **依赖**：T-R11-02、T-R11-03
+- **估时**：S（已完成）
+
+### T-R11-06 `test_config.py` 与 `default.toml` 漂移修复
+- `default.toml` 的 `state_hz=1`、`fixed_delta_seconds=0.05` 是 dev-tune 后保留值；原测试硬绑 10.0 / 0.0333 与 Python defaults，toml 一漂移就红
+- 改测试断言为"加载 OK + 字段类型与正负号合理 + 真正稳定字段(map/port/scenario)精确等值"，不绑数值
+- **DoD**：`pytest tests/test_config.py -v` 全绿；调 toml 不会触发该测试失败
+- **依赖**：无（与 R11 并行收尾）
+- **估时**：S（已完成）
+
+### T-R11-07 文档同步
+- `README.md`：表格补 `bridge-agent-protocol-v1.md` 引用，加协议合规说明段
+- `design-refactor-agent-boundary.md`：头表加 "R11 envelope 增量" 状态行 + 一段 R11 总结
+- `tasks-refactor.md`：本节（§11.5 R11）
+- **DoD**：三处文档 grep `envelope` / `PROTOCOL_VERSION` 至少各 1 处命中
+- **依赖**：T-R11-01..T-R11-06
+- **估时**：S（已完成）
+
+### R11 一致性不变量（对应协议 §12 抽检）
+
+完成后必满足：
+
+1. 任意 `/agent` 出站事件:外层有 `version / msg_id / type / timestamp / sender / payload` 全部 6 必填字段（`frame`/`sim_time` 允许 None）
+2. `hello` RPC 返回值含 `version == "1.0"` + `bridge_session_id` + `scenario` + `server == "carlabridge"`
+3. `agent.command` 入站:envelope 形态与裸 dict 形态被 `dispatcher.parse(...)` 等价处理(回归 `test_agent_command_envelope_wrapping_accepted`)
+4. `/`(前端) 的 `state_update` / `system_metrics` / `event_log` 仍是裸 payload(避免 frontend 破坏)
+5. `incident.position` 仍为 `{x,y,z}` 对象、`vehicles[].pose` 仍为 `[x,y,z]` 数组(协议 §4.1.2 双形态)
+
+---
+
 ## 12. 验收（重构完成定义）
 
 整个重构 **done** 的判定（按顺序验证）：
 
-1. **`pytest -q` 全绿**（含所有新增测试 R1~R8）
+1. **`pytest -q` 全绿**（含所有新增测试 R1~R8、R11）
 2. **`python -m carlabridge.main` 空载启动**：Ctrl+C 干净退出；无 KeyError / ImportError
 3. **`grep -rn "mock_agent\|carlabridge.agent\|agent_ack\|agent_reject\|_SCRIPT" carlabridge/ tests/`** 返回 0 行
 4. **冒烟流程**（设计 §8.1）：3 终端跑通点火 → 灭火 → reset → 重发 PATROL，无 stuck
 5. **CARLA 联跑**：S1 场景下，curl 触发 fire，test_agent 完成处理后 curl reset，循环 5 次稳定
-6. **文档同步**：`design.md`、`spec.md`、`README.md`、`CLAUDE.md` 全部无矛盾
+6. **文档同步**：`design.md`、`spec.md`、`README.md`、`CLAUDE.md`、`bridge-agent-protocol-v1.md` 全部无矛盾
+7. **协议 v1.0 合规**（R11 一致性不变量 §11.5）：任意 `/agent` 出站事件外层 envelope 字段齐全；`hello.version == "1.0"`；命令入站兼容 envelope/裸双形态
 
 ---
 

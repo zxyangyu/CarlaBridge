@@ -79,6 +79,11 @@ class WorldSnapshot:
     # commands so the Agent can reconcile a dropped command_status event.
     # Entries are already wire-shape dicts; the scenario builds them.
     in_flight_commands: list[dict] = field(default_factory=list)
+    # `frame` is the bridge tick counter at snapshot-build time. Carried so
+    # the broadcaster can populate the protocol §3.1 envelope's `frame`
+    # field. NOT serialized into the snapshot payload — protocol §4.1.1
+    # places `frame` in the envelope only.
+    frame: int = 0
 
     def to_dict(self) -> dict:
         """JSON-ready full payload — used directly by ``for_agent``.
@@ -178,13 +183,15 @@ class SnapshotBuilder:
         run_id: int = 0,
         bridge_session_id: str = "",
         in_flight_commands: list[dict] | None = None,
+        frame: int = 0,
     ) -> WorldSnapshot:
         """Build a :class:`WorldSnapshot`.
 
         ``run_id`` / ``bridge_session_id`` / ``in_flight_commands`` are R2
         additions per design §4.1. They default so callers that don't yet
         have a runner / scenario wired in (tests, --no-carla mode) keep
-        working unchanged.
+        working unchanged. ``frame`` is threaded through for the protocol
+        v1.0 envelope (§3.1) but does not appear in the wire payload.
         """
         return WorldSnapshot(
             sim_time=sim_time,
@@ -195,6 +202,7 @@ class SnapshotBuilder:
             bridge_session_id=bridge_session_id,
             incidents=self._read_incidents(fleet),
             in_flight_commands=list(in_flight_commands or []),
+            frame=frame,
         )
 
     # ---- internals -----------------------------------------------------

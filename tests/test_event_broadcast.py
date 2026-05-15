@@ -87,8 +87,16 @@ async def test_broadcaster_fans_event_log_to_both_namespaces():
         await asyncio.sleep(0.1)
         fe = sio.emits[("event_log", "/")]
         ag = sio.emits[("event_log", "/agent")]
-        assert any(p["message"] == "fire detected" for p in fe)
-        assert any(p["message"] == "fire detected" for p in ag)
+        # Frontend namespace stays bare (out of protocol scope, §1.2).
+        assert any(p.get("message") == "fire detected" for p in fe)
+        # Agent namespace is envelope-wrapped per protocol §3.1.
+        assert any(
+            isinstance(p, dict)
+            and p.get("type") == "event_log"
+            and p.get("version") == "1.0"
+            and p.get("payload", {}).get("message") == "fire detected"
+            for p in ag
+        )
     finally:
         await bc.stop()
 

@@ -24,6 +24,7 @@ import socketio  # python-socketio[asyncio_client]
 DEFAULT_URL = "http://127.0.0.1:5000"
 NAMESPACE = "/agent"
 AGENT_ID = "test-agent"
+PROTOCOL_VERSION = "1.0"
 
 UAV_IDS = ("UAV-01", "UAV-02", "UAV-03")
 UGV_ID = "UGV-01"
@@ -47,6 +48,37 @@ def _pose_xyz(v: Any) -> tuple[float, float, float] | None:
 
 def _dist(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
     return math.sqrt((a[0]-b[0])**2 + (a[1]-b[1])**2 + (a[2]-b[2])**2)
+
+
+def _unwrap(data: Any) -> dict:
+    """Protocol v1.0 §3.2 — Agent receives envelope-wrapped events from Bridge.
+
+    Return the inner ``payload`` dict if present, else the raw dict (so the
+    reference client stays robust against pre-v1.0 bridges during rollout).
+    """
+    if isinstance(data, dict):
+        inner = data.get("payload")
+        if isinstance(inner, dict):
+            return inner
+        return data
+    return {}
+
+
+def _envelope(event_type: str, payload: dict) -> dict:
+    """Protocol §3.1 envelope for Agent → Bridge events."""
+    import time
+    import uuid
+
+    return {
+        "version": PROTOCOL_VERSION,
+        "msg_id": str(uuid.uuid4()),
+        "type": event_type,
+        "timestamp": time.time(),
+        "frame": None,
+        "sim_time": None,
+        "sender": "agent",
+        "payload": payload,
+    }
 
 
 class TestAgent:
@@ -75,13 +107,14 @@ class TestAgent:
 
     async def _call_cmd(self, kind: str, target: str, params: dict | None = None) -> dict | None:
         cmd_id = self._next_id(kind)
-        env: dict = {"id": cmd_id, "kind": kind, "target": target}
+        cmd: dict = {"id": cmd_id, "kind": kind, "target": target}
         if params:
-            env["params"] = params
+            cmd["params"] = params
+        envelope = _envelope("agent.command", cmd)
         # Retry BadNamespace briefly (call may land during the connect handshake).
         for _ in range(3):
             try:
-                ack = await self.sio.call("agent.command", env,
+                ack = await self.sio.call("agent.command", envelope,
                                           namespace=NAMESPACE, timeout=2.0)
                 break
             except socketio.exceptions.BadNamespaceError:
@@ -119,6 +152,7 @@ class TestAgent:
     # ---- event handlers --------------------------------------------------
 
     async def on_snapshot(self, snap: dict) -> None:
+        snap = _unwrap(snap)
         self._dbg(f"[recv] state_snapshot sim_time={snap.get('sim_time')} "
                   f"incidents={len(snap.get('incidents', []))} "
                   f"in_flight={len(snap.get('in_flight_commands', []))}")
@@ -174,6 +208,7 @@ class TestAgent:
                     )
 
     async def on_command_status(self, payload: dict) -> None:
+        payload = _unwrap(payload)
         cmd_id = payload.get("cmd_id")
         status = payload.get("status")
         reason = payload.get("reason")
@@ -184,6 +219,7 @@ class TestAgent:
             await self._call_cmd("UGV_RTL", UGV_ID)
 
     async def on_scenario_event(self, payload: dict) -> None:
+        payload = _unwrap(payload)
         event = payload.get("event")
         self._log(f"[recv] scenario_event {event} run_id={payload.get('run_id')}")
         if event == "reset":
@@ -192,6 +228,7 @@ class TestAgent:
             self.seen_first_snapshot = False  # re-PATROL on next snapshot
 
     async def on_event_log(self, payload: dict) -> None:
+        payload = _unwrap(payload)
         self._dbg(f"[recv] event_log {payload.get('severity')} "
                   f"{payload.get('source')} {payload.get('message')}"
                   + (f" cmd_id={payload['cmd_id']}" if payload.get('cmd_id') else ""))
@@ -205,11 +242,21 @@ async def main(args: argparse.Namespace) -> int:
     async def connect():  # noqa: ANN201
         print(f"[conn] connected to {args.url}{NAMESPACE}", flush=True)
         try:
-            ack = await sio.call("hello", {"agent_id": AGENT_ID},
-                                 namespace=NAMESPACE, timeout=2.0)
+            ack = await sio.call(
+                "hello",
+                {"agent_id": AGENT_ID, "version": PROTOCOL_VERSION},
+                namespace=NAMESPACE, timeout=2.0,
+            )
             print(f"[conn] hello ack: {ack}", flush=True)
             if isinstance(ack, dict):
                 agent.bridge_session_id = ack.get("bridge_session_id")
+                ver = ack.get("version")
+                if ver and ver.split(".", 1)[0] != PROTOCOL_VERSION.split(".", 1)[0]:
+                    print(
+                        f"[conn] WARNING: protocol major mismatch agent={PROTOCOL_VERSION} "
+                        f"bridge={ver} (continuing per protocol §11.1)",
+                        flush=True,
+                    )
         except Exception as e:
             print(f"[conn] hello failed: {e}", flush=True)
 

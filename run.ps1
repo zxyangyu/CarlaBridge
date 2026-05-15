@@ -41,9 +41,9 @@ param(
 $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PythonExe = "./.venv/python.exe"
-$PythonExe = "D:\carla\env\python.exe"
+# $PythonExe = "D:\carla\env\python.exe"
 if (-not $env:CARLA_AGENTS_ROOT) {
-    $env:CARLA_AGENTS_ROOT = "D:\carla\PythonAPI\carla"
+    $env:CARLA_AGENTS_ROOT = "E:\Program Files\CARLA_0.9.16\PythonAPI\carla"
 }
 
 if (-not (Test-Path $PythonExe)) {

@@ -97,7 +97,13 @@ async def test_broadcast_command_status_reaches_subscribed_client(live_bridge):
         await client.disconnect()
 
     assert len(received) == 1
-    p = received[0]
+    env = received[0]
+    # Protocol v1.0 §3.1 envelope wraps the command_status payload.
+    assert env["version"] == "1.0"
+    assert env["type"] == "command_status"
+    assert env["sender"] == "bridge"
+    assert env["sim_time"] == 1.0
+    p = env["payload"]
     assert p["cmd_id"] == "cmd-a"
     assert p["status"] == "completed"
 
@@ -155,5 +161,9 @@ async def test_broadcast_scenario_event_reset_reaches_client(live_bridge):
     finally:
         await client.disconnect()
 
-    assert received[0]["event"] == "reset"
-    assert received[0]["run_id"] == 7
+    env = received[0]
+    assert env["version"] == "1.0"
+    assert env["type"] == "scenario_event"
+    p = env["payload"]
+    assert p["event"] == "reset"
+    assert p["run_id"] == 7

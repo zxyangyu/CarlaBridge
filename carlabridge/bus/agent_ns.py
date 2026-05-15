@@ -20,6 +20,7 @@ from typing import Callable
 
 import socketio
 
+from carlabridge.bus.envelope import PROTOCOL_VERSION, unwrap, wrap
 from carlabridge.bus.projector import for_agent
 from carlabridge.commands.bus import CommandBus
 from carlabridge.commands.dispatcher import parse as parse_command
@@ -92,7 +93,17 @@ class AgentNamespace(socketio.AsyncNamespace):
         self._event_log.add("ok", "BRIDGE", f"agent connected sid={sid}")
         snap = self._snap_ref.get()
         if snap is not None:
-            await self.emit("state_snapshot", for_agent(snap), to=sid)
+            payload = for_agent(snap)
+            await self.emit(
+                "state_snapshot",
+                wrap(
+                    "state_snapshot",
+                    payload,
+                    sim_time=snap.sim_time,
+                    frame=getattr(snap, "frame", None),
+                ),
+                to=sid,
+            )
 
     async def on_disconnect(self, sid: str) -> None:
         log.info("agent disconnected sid=%s", sid)
@@ -102,12 +113,13 @@ class AgentNamespace(socketio.AsyncNamespace):
     # ---- handshake (RPC) ---------------------------------------------
 
     async def on_hello(self, sid: str, payload: dict | None = None) -> dict:
-        """sio.call('hello', {...}) handshake (design §8.1).
+        """sio.call('hello', {...}) handshake (protocol §2.2).
 
         Returns the Bridge's identity so the Agent can recognise restart vs
-        reset.
+        reset. The ``version`` field is the protocol version (§2.2).
+        Tolerates envelope-wrapped or bare inbound payloads (§3.2).
         """
-        payload = payload or {}
+        payload = unwrap(payload) if payload is not None else {}
         log.info("agent hello sid=%s payload=%s", sid, payload)
         self._event_log.add(
             "info", "BRIDGE",
@@ -115,6 +127,7 @@ class AgentNamespace(socketio.AsyncNamespace):
         )
         return {
             "server": "carlabridge",
+            "version": PROTOCOL_VERSION,
             "bridge_session_id": self._bridge_session_id,
             "scenario": self._scenario_name,
         }
@@ -122,19 +135,20 @@ class AgentNamespace(socketio.AsyncNamespace):
     # ---- command RPC --------------------------------------------------
 
     async def on_agent_command(self, sid: str, payload: dict | None = None) -> dict:
-        """sio.call('agent.command', envelope) handler (design §3.3, §4.5).
+        """sio.call('agent.command', envelope) handler (protocol §5.1).
 
         Returns:
             {"status": "accepted", "cmd_id": ..., "queued_at_sim_time": ...}
               when the parse and submit succeed.
             {"status": "rejected", "cmd_id": ..., "reason": ..., "detail": ...}
-              otherwise. Reasons come from the canonical list (design §3.3).
+              otherwise. Reasons come from the canonical list (protocol §10.1).
+
+        Per protocol §3.2 the inbound payload may be envelope-wrapped or bare;
+        ``unwrap()`` collapses both shapes. The RPC ack is NOT envelope-wrapped
+        (protocol §5.1.2 — a simple dict).
         """
-        payload = payload or {}
-        cmd_id_hint = payload.get("id") or payload.get("payload", {}).get("id", "?")
-        # Some agents wrap the command in an envelope ``{... "payload": {cmd}}``;
-        # accept either flavor.
-        envelope_body = payload.get("payload") if isinstance(payload.get("payload"), dict) else payload
+        envelope_body = unwrap(payload) if payload is not None else {}
+        cmd_id_hint = envelope_body.get("id", "?")
 
         log.info("agent.command sid=%s id=%s", sid, cmd_id_hint)
 
@@ -170,29 +184,47 @@ class AgentNamespace(socketio.AsyncNamespace):
 
     async def on_event_log(self, sid: str, payload: dict) -> None:
         # Pass-through: agent's own decision logs (no return value needed).
+        # Per protocol §3.2 + §5.2 the payload may arrive envelope-wrapped or
+        # bare; ``unwrap()`` collapses both. ``source`` is always overwritten
+        # to AGENT here so spoofed sources can't masquerade as BRIDGE.
+        body = unwrap(payload) if payload is not None else {}
         self._event_log.add(
-            payload.get("severity", "info"),
+            body.get("severity", "info"),
             "AGENT",
-            str(payload.get("message", "")),
+            str(body.get("message", "")),
         )
 
     # ---- broadcast helpers (async-loop side, called by main wiring) ----
 
     async def broadcast_command_status(self, payload: dict) -> None:
-        """Emit ``command_status`` to every connected agent (design §3.4)."""
+        """Emit ``command_status`` envelope to every agent (protocol §4.2)."""
         try:
-            await self.emit("command_status", payload)
+            await self.emit(
+                "command_status",
+                wrap(
+                    "command_status",
+                    payload,
+                    sim_time=payload.get("at_sim_time"),
+                ),
+            )
         except Exception:  # pragma: no cover -- best-effort
             log.exception("command_status emit failed")
 
     async def broadcast_scenario_event(self, payload: dict) -> None:
-        """Emit ``scenario_event`` to every connected agent (design §4.3).
+        """Emit ``scenario_event`` envelope to every agent (protocol §4.3).
 
-        Only carries reset signal in refactor v0.3 — fire ignite / extinguish
-        are inferred from snapshot.incidents diffs.
+        Only carries reset signal in v1.0 — fire ignite / extinguish are
+        inferred from ``snapshot.incidents`` diffs.
         """
         try:
-            await self.emit("scenario_event", payload)
+            await self.emit(
+                "scenario_event",
+                wrap(
+                    "scenario_event",
+                    payload,
+                    sim_time=payload.get("at_sim_time"),
+                ),
+            )
         except Exception:  # pragma: no cover -- best-effort
             log.exception("scenario_event emit failed")
 

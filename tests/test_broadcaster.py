@@ -77,7 +77,12 @@ async def test_broadcaster_emits_state_periodically():
     assert fe_payload["uav"]["id"] == "UAV-01"
     assert fe_payload["ugv"]["id"] == "UGV-01"
 
-    ag_payload = ag_emits[0]
+    # Protocol v1.0 §3.1: /agent emits are envelope-wrapped.
+    ag_envelope = ag_emits[0]
+    assert ag_envelope["version"] == "1.0"
+    assert ag_envelope["type"] == "state_snapshot"
+    assert ag_envelope["sender"] == "bridge"
+    ag_payload = ag_envelope["payload"]
     assert ag_payload["sim_time"] == 0.5
     assert len(ag_payload["uavs"]) == 1
 

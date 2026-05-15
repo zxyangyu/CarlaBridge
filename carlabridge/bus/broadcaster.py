@@ -15,6 +15,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
+from carlabridge.bus.envelope import wrap
 from carlabridge.bus.projector import FocusBinding, for_agent, for_frontend
 from carlabridge.core.atomic import AtomicRef
 from carlabridge.core.snapshot import WorldSnapshot
@@ -104,11 +105,20 @@ class Broadcaster:
                     continue
                 fe_payload = for_frontend(snap, self._focus)
                 ag_payload = for_agent(snap)
+                # Protocol v1.0 §3.1: every event to /agent is wrapped in the
+                # canonical envelope. The frontend namespace stays bare — it
+                # is out of protocol scope (§1.2) and has its own contract.
+                ag_envelope = wrap(
+                    "state_snapshot",
+                    ag_payload,
+                    sim_time=snap.sim_time,
+                    frame=getattr(snap, "frame", None),
+                )
                 # Fan out concurrently; failure of one namespace must not
                 # block the other.
                 results = await asyncio.gather(
                     self._sio.emit("state_update", fe_payload, namespace="/"),
-                    self._sio.emit("state_snapshot", ag_payload, namespace="/agent"),
+                    self._sio.emit("state_snapshot", ag_envelope, namespace="/agent"),
                     return_exceptions=True,
                 )
                 for r in results:
@@ -146,10 +156,14 @@ class Broadcaster:
             pass
 
     async def _emit_event_async(self, payload: dict) -> None:
+        # Protocol v1.0 §3.1 / §4.4: agent namespace gets the canonical
+        # envelope. The frontend namespace keeps the bare dict — frontend is
+        # out of protocol scope (§1.2) and consumes the legacy shape.
+        ag_envelope = wrap("event_log", payload)
         try:
             await asyncio.gather(
                 self._sio.emit("event_log", payload, namespace="/"),
-                self._sio.emit("event_log", payload, namespace="/agent"),
+                self._sio.emit("event_log", ag_envelope, namespace="/agent"),
                 return_exceptions=True,
             )
         except Exception:  # pragma: no cover -- best-effort

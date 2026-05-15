@@ -235,7 +235,12 @@ async def test_reset_cancels_two_uav_goto_and_one_ugv_goto(live_bridge_with_tick
 
     @sio_client.on("command_status", namespace="/agent")
     def _on_cs(payload):
-        received.append(payload)
+        # Protocol v1.0 §3.1: /agent emits are envelope-wrapped — flatten so
+        # the test predicates below can keep reading payload fields directly.
+        if isinstance(payload, dict) and isinstance(payload.get("payload"), dict):
+            received.append(payload["payload"])
+        else:
+            received.append(payload)
 
     await sio_client.connect(_url(client), namespaces=["/agent"])
     try:
@@ -304,7 +309,10 @@ async def test_reset_also_emits_scenario_event(live_bridge_with_ticker):
 
     @sio_client.on("scenario_event", namespace="/agent")
     def _on_se(payload):
-        scenario_events.append(payload)
+        if isinstance(payload, dict) and isinstance(payload.get("payload"), dict):
+            scenario_events.append(payload["payload"])
+        else:
+            scenario_events.append(payload)
 
     await sio_client.connect(_url(client), namespaces=["/agent"])
     try:

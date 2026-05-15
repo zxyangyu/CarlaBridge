@@ -13,9 +13,12 @@
 | `spec.md` | WHAT / WHY — 需求规范、决议记录 (D1-D10) |
 | `design.md` | HOW — 架构、模块、跨域并发模型、风险（部分章节已被 refactor 文档 supersede，详见文内标注） |
 | `design-refactor-agent-boundary.md` | refactor v0.3 — Agent/Bridge 解耦、8 条命令、通用生命周期、HTTP 控制面 |
+| `../bridge-agent-protocol-v1.md` | **协议 v1.0 线契约** — Bridge ⇄ Agent envelope、事件清单、命令枚举、状态机的唯一权威；与 design 不一致以此为准 |
 | `tasks.md` | 开发拆分 — M0-M8 完成状态、AC/NF 真机进度 |
-| `tasks-refactor.md` | R1-R10 重构任务清单与 DoD |
+| `tasks-refactor.md` | R1-R11 重构任务清单与 DoD（R11 = 协议 v1.0 envelope 合规） |
 | `README.md` | 这个文档 — 安装、启动、故障排查、冒烟流程 |
+
+> **协议合规**：本 Bridge 实现遵循 `bridge-agent-protocol-v1.md` v1.0。所有 `/agent` namespace 出站事件（`state_snapshot` / `command_status` / `scenario_event` / `event_log`）统一包裹 envelope `{version, msg_id, type, timestamp, frame, sim_time, sender, payload}`；入站命令与 hello 兼容 envelope/裸双形态。`/`(前端) 仍按既有 frontend 协议发裸 payload（前端协议不在 v1.0 范围）。版本字段位于 `carlabridge/bus/envelope.py:PROTOCOL_VERSION`。
 
 ## 2. 环境要求
 
@@ -62,7 +65,7 @@ pip install "E:\Program Files\CARLA_0.9.16\PythonAPI\carla\dist\carla-0.9.16-cp3
 将 `<CARLA_ROOT>` 换成你的安装目录（示例：`E:\Program Files\CARLA_0.9.16`）：
 
 ```cmd
-"<CARLA_ROOT>\CarlaUE4.exe" -quality-level=Low -ResX=1280 -ResY=720
+"<CARLA_ROOT>\CarlaUE4.exe" -quality-level=Low -ResX=1280 -ResY=720 -RenderOffScreen
 ```
 （建议 Low quality 以避免 CARLA 渲染线程拖慢 tick；详见故障 §6.1）
 
@@ -95,12 +98,10 @@ npm run dev
 
 ```
 VITE_SOCKET_URL=http://localhost:5000
-VITE_UAV_FEED_URL=http://localhost:5000/video_feed?camera=aerial
-VITE_UGV_FEED_URL=http://localhost:5000/video_feed?camera=ground
-VITE_CITY_FEED_URL=http://localhost:5000/video_feed?camera=city
+VITE_UAV_FEED_URL=video_feed?camera=aerial
+VITE_UGV_FEED_URL=video_feed?camera=ground
+VITE_CITY_FEED_URL=video_feed?camera=city
 ```
-
-变量名错位：前端 `UAV_FEED_URL` ↔ 后端 camera id `aerial`；前端 `UGV_FEED_URL` ↔ `ground`。
 
 ### 3.4 你应该看到什么（仅 Bridge 启动后）
 
@@ -111,7 +112,7 @@ VITE_CITY_FEED_URL=http://localhost:5000/video_feed?camera=city
 - EventLog 仅有启动相关事件（spawn 完成、相机绑定等）
 - **不会**自动出现火情、UGV 不会自己跑、UAV 不会自己飞
 
-要看到完整的"巡逻 → 火情 → 灭火 → 返航"流程，需要按 §3.5 起测试 agent + §3.6 用 curl 触发火情。
+要看到完整的"巡逻 → 火情 → 灭火 → 返航"流程，需要按 §3.5 启动 `test_agent.py` 并用 HTTP（PowerShell 或 curl）触发火情。
 
 ### 3.5 端到端冒烟流程（test_agent.py + HTTP 控制面）
 
@@ -123,15 +124,18 @@ VITE_CITY_FEED_URL=http://localhost:5000/video_feed?camera=city
 
 # 终端 2：测试 Agent（仓 root 的 test_agent.py）
 conda activate ".\.venv"
-python test_agent.py --url http://127.0.0.1:5000 --verbose
+python test_agent.py
+# 默认连接 http://127.0.0.1:5000；可加 --url / -v(--verbose) / --no-extinguish 等
 # 输出：connected → hello → 收到第一帧 snapshot → 给 UAV-01/02/03 各发 1 条
 #       UAV_PATROL(loop=true) → 收到 3 个 ongoing 事件，进入待命
 
-# 终端 3：operator 触发火情
-curl.exe -X POST http://127.0.0.1:5000/scenario/fire `
-  -H "Content-Type: application/json" `
-  -d '{\"id\":\"fire-001\",\"position\":{\"x\":90,\"y\":0,\"z\":0}}'
-# 终端 2 应该输出（按 sim_time 推进）：
+# 终端 3：operator 触发火情（相对 UGV-01 origin 东偏 +90 m，勿在已开的 PowerShell 里直接粘贴带嵌套 powershell 的一行）
+# —— PowerShell 内直接执行（推荐）：
+$ugv = (Invoke-RestMethod 'http://127.0.0.1:5000/scenario/status').entities.'UGV-01'.origin
+$body = @{ id = 'fire-001'; position = @{ x = ($ugv.x + 90.0); y = $ugv.y; z = $ugv.z } } | ConvertTo-Json -Compress
+Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:5000/scenario/fire' -ContentType 'application/json' -Body $body
+# —— 或从 cmd.exe 一行调用子 PowerShell（全文见 §5.1 「从 cmd.exe 一行」）。
+# 测试 Agent 终端应输出（按 sim_time 推进）：
 #   incident fire-001 detected → UGV_GOTO(dest=fire-001+offset) accepted
 #   UGV-01 距 fire-001 ≤ 5m → UGV_EXTINGUISH(incident_id=fire-001) accepted
 #   command_status:completed UGV_EXTINGUISH → 发 UGV_RTL accepted
@@ -140,7 +144,7 @@ curl.exe -X POST http://127.0.0.1:5000/scenario/fire `
 # 终端 3：operator 触发 reset
 curl.exe -X POST http://127.0.0.1:5000/scenario/reset `
   -H "Content-Type: application/json" -d '{}'
-# 终端 2 应该输出：
+# 测试 Agent 终端应输出：
 #   scenario_event{event:"reset", run_id:N+1} → 清本地状态
 #   下一帧 snapshot run_id 跳变 → 重发 PATROL × 3
 ```
@@ -148,6 +152,8 @@ curl.exe -X POST http://127.0.0.1:5000/scenario/reset `
 完整冒烟流程预期 wall time ≈ 30-60 s（取决于 tick_fps；GRP 路径长则 UGV 段更慢）。
 
 `test_agent.py` 是**外部独立进程**，不在 Bridge 里跑；零内部 import，纯走 Socket.IO 协议路径，与真实 UrbanAgent 协议等价。可选参数：
+- `--url <URL>`：Bridge 基址（默认 `http://127.0.0.1:5000`）
+- `-v` / `--verbose`：详细日志
 - `--no-extinguish`：只发 UGV_GOTO 不灭火，用于测 supersede / reset cancel 链
 - `--namespace /agent`：指定 namespace（默认 `/agent`）
 
@@ -220,12 +226,20 @@ operator（人 / curl / cron / GUI）通过 3 个 HTTP 端点驱动场景。Agen
 
 #### `POST /scenario/fire` — 点火
 
+相对 **UGV-01** 的 `origin` 向东偏移 90 m 放置火点（与 `GET /scenario/status` 对齐，避免写死世界坐标）：
+
 ```powershell
-curl.exe -X POST http://127.0.0.1:5000/scenario/fire `
-  -H "Content-Type: application/json" `
-  -d '{\"id\":\"fire-001\",\"position\":{\"x\":90,\"y\":0,\"z\":0},\"severity\":\"high\"}'
+$ugv = (Invoke-RestMethod 'http://127.0.0.1:5000/scenario/status').entities.'UGV-01'.origin
+$body = @{ id = 'fire-001'; position = @{ x = ($ugv.x + 90.0); y = $ugv.y; z = $ugv.z } } | ConvertTo-Json -Compress
+Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:5000/scenario/fire' -ContentType 'application/json' -Body $body
 # 200 OK -> {"status":"ok","incident_id":"fire-001","spawned_actor_id":42,
 #            "spawned_at_sim_time":412.34,"run_id":5}
+```
+
+从 **cmd.exe** 一行（勿在已打开的 PowerShell 里粘贴，否则外层会提前展开 `$`）：
+
+```cmd
+powershell -NoProfile -Command "$ugv = (Invoke-RestMethod 'http://127.0.0.1:5000/scenario/status').entities.'UGV-01'.origin; $body = @{ id = 'fire-001'; position = @{ x = ($ugv.x + 90.0); y = $ugv.y; z = $ugv.z } } | ConvertTo-Json -Compress; Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:5000/scenario/fire' -ContentType 'application/json' -Body $body"
 ```
 
 请求体：`position{x,y,z}` 必填；`id`（默认 `fire-<uuid8>`）/ `kind`（默认 `"fire"`）/ `severity`（默认 `"high"`）/ `blueprint`（默认按候选回退）可选。
@@ -356,7 +370,7 @@ python -m pytest tests/ -q
 | AC-3 | MJPEG 兜底 | ✅ | 手工验证 |
 | AC-4 | command ack 闭环 | ✅ | sio.call return-value (refactor §3.3)；实测 latency 0-250 ms |
 | AC-5 | S1 启动 ≤ 10 s | ✅ | 实测 ~3 s（空载就绪） |
-| AC-6 | S1 端到端流程 | ✅ | `test_agent.py` + curl 触发跑通；详见 §3.5 |
+| AC-6 | S1 端到端流程 | ✅ | `test_agent.py` + `POST /scenario/fire` 跑通；详见 §3.5 |
 | AC-7 | event_log 完整 | ✅ | 命令相关事件带 `cmd_id`，与 `command_status` 配对 |
 | AC-8 | 无残留 actor | ✅ | 单元 5×幂等 + `restart_smoke.ps1` 待真机跑 |
 | AC-9-12 | 性能 / 网络抖动 / 一键启动 / 前端 fallback | ✅ | 见 §6 |

@@ -2,14 +2,16 @@
 
 > 文档目的：定义 **WHAT changes & HOW** —— 把 Bridge 内的剧本/策略迁出，固化 Bridge ⇄ Agent 的协议。
 > 本文档**仅覆盖 CarlaBridge 仓内**的改动；UrbanAgent 改造由对方仓自行规划（本文档 §8 仅作协议参考）。
-> 上游：`design.md`、`spec.md`
+> 上游：`design.md`、`spec.md`、`bridge-agent-protocol-v1.md`（线协议契约）
 > 下游：`tasks.md` 增量任务（本文档评审通过后追加）
 
 | 字段 | 值 |
 |---|---|
-| 版本 | refactor v0.3（草案） |
-| 状态 | 待评审 |
+| 版本 | refactor v0.3 + R11 envelope 增量 |
+| 状态 | R1~R10 已落地，R11(协议 v1.0 envelope 合规)已合入 |
 | 决策依据 | 2026-05-15 对话纪要：保留 RTL/HOLD；删 mock-agent；Bridge 时间无关；HTTP 点火；命令通用完成通知；reset = 完全重新初始化；UrbanAgent 与本仓解耦 |
+
+> **R11 增量（2026-05-16 落地）**：所有 `/agent` 出站事件统一包裹协议 v1.0 envelope `{version, msg_id, type, timestamp, frame, sim_time, sender, payload}`（`bridge-agent-protocol-v1.md` §3.1）；`hello` RPC 返回值补 `version: "1.0"` 字段（§2.2）；入站 `on_hello` / `on_agent_command` / `on_event_log` 通过 `bus/envelope.unwrap()` 同时兼容 envelope 与裸 dict 形态（§3.2）。`/`(前端) namespace 出站仍保持裸 payload，前端协议不在 v1.0 范围内（§1.2）。详见 `tasks-refactor.md` §16 R11、`bus/envelope.py`。
 
 ---
 

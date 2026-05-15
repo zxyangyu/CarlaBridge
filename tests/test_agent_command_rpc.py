@@ -188,6 +188,8 @@ async def test_hello_returns_bridge_session_id(live_bridge):
             namespace="/agent", timeout=2,
         )
         assert ack["server"] == "carlabridge"
+        # Protocol v1.0 §2.2: hello return must carry the protocol version.
+        assert ack["version"] == "1.0"
         assert ack["bridge_session_id"] == "br-testfix"
         assert ack["scenario"] == "s1_fire"
     finally:

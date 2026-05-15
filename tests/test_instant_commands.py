@@ -217,7 +217,12 @@ async def _connect(client: TestClient) -> tuple[socketio.AsyncClient, list[dict]
 
     @sio_client.on("command_status", namespace="/agent")
     def _on_cs(payload):
-        received.append(payload)
+        # Protocol v1.0 §3.1: /agent emits are envelope-wrapped — flatten so
+        # downstream predicates can read payload fields directly.
+        if isinstance(payload, dict) and isinstance(payload.get("payload"), dict):
+            received.append(payload["payload"])
+        else:
+            received.append(payload)
 
     await sio_client.connect(
         f"http://127.0.0.1:{client.server.port}", namespaces=["/agent"],

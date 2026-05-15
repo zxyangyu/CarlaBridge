@@ -247,6 +247,7 @@ class TickLoop:
                     run_id=run_id,
                     bridge_session_id=self._bridge_session_id,
                     in_flight_commands=in_flight,
+                    frame=self._clock.tick_count,
                 )
                 self._snapshot_ref.set(snap)
             except Exception:
