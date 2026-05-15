@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from carlabridge.bus.projector import FocusBinding, for_agent, for_frontend
+from carlabridge.core.fleet import Pose
+from carlabridge.core.incident import Incident
 from carlabridge.core.snapshot import (
     TrafficLightState,
     UavState,
@@ -112,3 +114,90 @@ def test_focus_binding_thread_safe_setters():
     assert fb.snapshot() == ("UAV-09", "UGV-09")
     fb.set_uav(None)
     assert fb.snapshot() == (None, "UGV-09")
+
+
+# ---- R2: for_agent v0.3 wire payload -------------------------------------
+
+
+def _make_snap_v2() -> WorldSnapshot:
+    return WorldSnapshot(
+        sim_time=42.0,
+        run_id=3,
+        bridge_session_id="br-9c1a",
+        traffic_lights=[],
+        vehicles=[
+            VehicleState(
+                id="UGV-01", role="dispatchable", pose=(0, 0, 0),
+                yaw=0, speed=0, heading=0,
+            ),
+        ],
+        uavs=[
+            UavState(id="UAV-01", role="patrol", pose=(0, 0, 60),
+                     altitude=60, heading=0, battery=100),
+        ],
+        incidents=[
+            Incident(id="fire-001", kind="fire",
+                     position=Pose(90, 0, 0), severity="high",
+                     since_sim_time=12.5),
+        ],
+        in_flight_commands=[
+            {"cmd_id": "cmd-a", "kind": "UAV_PATROL", "target": "UAV-01",
+             "accepted_at_sim_time": 1.0},
+        ],
+    )
+
+
+def test_for_agent_v2_includes_all_design_4_1_fields():
+    payload = for_agent(_make_snap_v2())
+    expected = {
+        "sim_time", "run_id", "bridge_session_id",
+        "traffic_lights", "vehicles", "uavs",
+        "incidents", "in_flight_commands",
+    }
+    assert expected <= set(payload.keys())
+
+
+def test_for_agent_v2_incidents_have_xyz_only_position():
+    payload = for_agent(_make_snap_v2())
+    assert len(payload["incidents"]) == 1
+    inc = payload["incidents"][0]
+    # Pose euler must not leak through.
+    assert set(inc["position"].keys()) == {"x", "y", "z"}
+    assert inc["id"] == "fire-001"
+    assert inc["severity"] == "high"
+    assert inc["since_sim_time"] == 12.5
+
+
+def test_for_agent_v2_in_flight_commands_passed_through_in_order():
+    payload = for_agent(_make_snap_v2())
+    assert [c["cmd_id"] for c in payload["in_flight_commands"]] == ["cmd-a"]
+
+
+def test_for_agent_v2_field_order_is_stable():
+    payload = for_agent(_make_snap_v2())
+    assert list(payload.keys()) == [
+        "sim_time",
+        "run_id",
+        "bridge_session_id",
+        "traffic_lights",
+        "vehicles",
+        "uavs",
+        "incidents",
+        "in_flight_commands",
+    ]
+
+
+def test_for_agent_v2_run_id_and_session_threaded_through():
+    payload = for_agent(_make_snap_v2())
+    assert payload["run_id"] == 3
+    assert payload["bridge_session_id"] == "br-9c1a"
+
+
+def test_for_agent_v2_empty_defaults():
+    """A snapshot that never had R2 fields supplied still projects cleanly."""
+    snap = WorldSnapshot(sim_time=0)
+    payload = for_agent(snap)
+    assert payload["run_id"] == 0
+    assert payload["bridge_session_id"] == ""
+    assert payload["incidents"] == []
+    assert payload["in_flight_commands"] == []

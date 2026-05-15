@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from carlabridge.core.fleet import Fleet, Pose, VirtualMember
+from carlabridge.core.incident import Incident
 
 
 def test_pose_distance():
@@ -104,3 +105,107 @@ def test_fleet_clear():
     f.register(VirtualMember(entity_id="UAV-02", role="patrol"))
     f.clear()
     assert len(f) == 0
+
+
+# ---- origins (R2) --------------------------------------------------------
+
+
+def test_fleet_origin_set_and_get():
+    f = Fleet()
+    f.register(VirtualMember(entity_id="UAV-01", role="patrol"))
+    f.set_origin("UAV-01", Pose(x=-20, y=0, z=60))
+    o = f.get_origin("UAV-01")
+    assert o is not None
+    assert (o.x, o.y, o.z) == (-20, 0, 60)
+
+
+def test_fleet_get_origin_missing_returns_none():
+    f = Fleet()
+    assert f.get_origin("UAV-99") is None
+
+
+def test_fleet_origins_snapshot_is_a_copy():
+    f = Fleet()
+    f.set_origin("UAV-01", Pose(0, 0, 60))
+    snap = f.origins()
+    snap["UAV-99"] = Pose(9, 9, 9)
+    # Mutating the snapshot must not leak into Fleet.
+    assert f.get_origin("UAV-99") is None
+
+
+def test_fleet_register_does_not_implicitly_set_origin():
+    f = Fleet()
+    f.register(VirtualMember(entity_id="UAV-01", role="patrol", _pose=Pose(5, 6, 7)))
+    assert f.get_origin("UAV-01") is None
+
+
+def test_fleet_unregister_drops_origin():
+    f = Fleet()
+    f.register(VirtualMember(entity_id="UAV-01", role="patrol"))
+    f.set_origin("UAV-01", Pose(1, 2, 3))
+    f.unregister("UAV-01")
+    assert f.get_origin("UAV-01") is None
+
+
+def test_fleet_clear_drops_origins():
+    f = Fleet()
+    f.set_origin("UAV-01", Pose())
+    f.set_origin("UGV-01", Pose())
+    f.clear()
+    assert f.origins() == {}
+
+
+# ---- incidents (R2) ------------------------------------------------------
+
+
+def _mk_incident(iid: str = "fire-001", since: float = 12.5) -> Incident:
+    return Incident(
+        id=iid, kind="fire", position=Pose(x=90, y=0, z=0),
+        severity="high", since_sim_time=since,
+    )
+
+
+def test_fleet_add_incident_and_get():
+    f = Fleet()
+    inc = _mk_incident()
+    f.add_incident(inc)
+    assert f.get_incident("fire-001") is inc
+
+
+def test_fleet_add_incident_duplicate_raises():
+    f = Fleet()
+    f.add_incident(_mk_incident("fire-001"))
+    with pytest.raises(ValueError):
+        f.add_incident(_mk_incident("fire-001"))
+
+
+def test_fleet_remove_incident_returns_removed_or_none():
+    f = Fleet()
+    inc = _mk_incident("fire-001")
+    f.add_incident(inc)
+    assert f.remove_incident("fire-001") is inc
+    assert f.remove_incident("fire-001") is None
+
+
+def test_fleet_clear_incidents():
+    f = Fleet()
+    f.add_incident(_mk_incident("fire-001"))
+    f.add_incident(_mk_incident("fire-002"))
+    f.clear_incidents()
+    assert f.incidents() == {}
+
+
+def test_fleet_incidents_snapshot_is_a_copy():
+    f = Fleet()
+    f.add_incident(_mk_incident("fire-001"))
+    snap = f.incidents()
+    snap.pop("fire-001")
+    # Mutating the snapshot must not leak into Fleet.
+    assert f.get_incident("fire-001") is not None
+
+
+def test_fleet_clear_also_drops_incidents():
+    f = Fleet()
+    f.add_incident(_mk_incident("fire-001"))
+    f.clear()
+    assert f.incidents() == {}

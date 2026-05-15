@@ -46,10 +46,6 @@ class VideoCfg(BaseModel):
     frame_queue_drop_log_interval_s: float = 5.0
 
 
-class AgentCfg(BaseModel):
-    mode: Literal["mock", "remote"] = "mock"
-
-
 class ScenarioCfg(BaseModel):
     default: str = "s1_fire"
 
@@ -70,7 +66,6 @@ class Settings(BaseSettings):
     server: ServerCfg = Field(default_factory=ServerCfg)
     broadcast: BroadcastCfg = Field(default_factory=BroadcastCfg)
     video: VideoCfg = Field(default_factory=VideoCfg)
-    agent: AgentCfg = Field(default_factory=AgentCfg)
     scenario: ScenarioCfg = Field(default_factory=ScenarioCfg)
     logging: LoggingCfg = Field(default_factory=LoggingCfg)
 

@@ -8,7 +8,7 @@
 host = "127.0.0.1"
 port = 2000
 timeout_s = 30.0
-fixed_delta_seconds = 0.0333    # 30 Hz
+fixed_delta_seconds = 0.05
 map = "Town10HD_Opt"
 
 [server]
@@ -17,16 +17,13 @@ port = 5000
 cors_origins = ["http://localhost:5173"]
 
 [broadcast]
-state_hz = 10
+state_hz = 1
 metrics_hz = 1
 
 [video]
 default_fps = 25
 default_resolution = [1280, 720]
 frame_queue_drop_log_interval_s = 5
-
-[agent]
-mode = "mock"                   # "mock" | "remote"
 
 [scenario]
 default = "s1_fire"

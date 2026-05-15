@@ -1,7 +1,10 @@
 """Frontend Socket.IO namespace ('/').
 
 On connect: send the current projected snapshot + replay last 100 events.
-On `agent_command` (frontend): treat as a SUGGESTION (spec D4) → AgentLink.
+
+Refactor v0.3 (design §7.6): the frontend ``agent_command`` "suggestion"
+route is removed. The frontend is a viewer; commands flow exclusively from
+the Agent via ``sio.call('agent.command', ..., namespace='/agent')``.
 """
 
 from __future__ import annotations
@@ -10,7 +13,6 @@ import logging
 
 import socketio
 
-from carlabridge.agent.link import AgentLink
 from carlabridge.bus.projector import FocusBinding, for_frontend
 from carlabridge.core.atomic import AtomicRef
 from carlabridge.core.snapshot import WorldSnapshot
@@ -27,13 +29,11 @@ class FrontendNamespace(socketio.AsyncNamespace):
         event_log: EventLog,
         snapshot_ref: AtomicRef[WorldSnapshot],
         focus: FocusBinding,
-        agent_link: AgentLink | None = None,
     ) -> None:
         super().__init__(namespace)
         self._event_log = event_log
         self._snap_ref = snapshot_ref
         self._focus = focus
-        self._agent_link = agent_link
         self._sids: set[str] = set()
 
     @property
@@ -60,19 +60,3 @@ class FrontendNamespace(socketio.AsyncNamespace):
         log.info("frontend disconnected sid=%s", sid)
         self._sids.discard(sid)
         self._event_log.add("info", "BRIDGE", f"frontend disconnected sid={sid}")
-
-    async def on_agent_command(self, sid: str, payload: dict) -> None:
-        """Frontend `agent_command` is a SUGGESTION (spec §3.4 / D4)."""
-        log.info("frontend suggestion sid=%s payload=%s", sid, payload)
-        self._event_log.add(
-            "info", "BRIDGE",
-            f"frontend suggestion received: id={payload.get('id', '?')} "
-            f"target={payload.get('target', '?')} text={payload.get('text', '?')}",
-        )
-        if self._agent_link is None:
-            log.warning("no agent_link wired; suggestion dropped")
-            return
-        try:
-            await self._agent_link.on_suggestion(payload)
-        except Exception:
-            log.exception("agent_link.on_suggestion raised")

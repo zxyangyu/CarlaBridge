@@ -13,7 +13,6 @@ import logging
 import socketio
 from aiohttp import web
 
-from carlabridge.agent.link import AgentLink
 from carlabridge.bus.agent_ns import AgentNamespace
 from carlabridge.bus.frontend_ns import FrontendNamespace
 from carlabridge.bus.projector import FocusBinding
@@ -24,6 +23,7 @@ from carlabridge.core.snapshot import WorldSnapshot
 from carlabridge.obs.event_log import EventLog
 from carlabridge.obs.metrics import Metrics
 from carlabridge.sensors.camera import CameraManager
+from carlabridge.bus.routes_scenario import register_routes as register_scenario_routes
 from carlabridge.streaming.mjpeg import mjpeg_route
 from carlabridge.streaming.webrtc import signaling_route
 
@@ -49,8 +49,9 @@ def build_app(
     focus: FocusBinding,
     camera_manager: CameraManager,
     command_bus: CommandBus | None = None,
-    agent_link: AgentLink | None = None,
     shutdown_event: "asyncio.Event | None" = None,
+    bridge_session_id: str = "",
+    scenario_name: str = "",
 ) -> tuple[web.Application, socketio.AsyncServer]:
     """Build the aiohttp app with the (already-constructed) Socket.IO server
     attached and namespaces registered.
@@ -62,13 +63,14 @@ def build_app(
         event_log=event_log,
         snapshot_ref=snapshot_ref,
         focus=focus,
-        agent_link=agent_link,
     )
     agent_ns = AgentNamespace(
         "/agent",
         event_log=event_log,
         snapshot_ref=snapshot_ref,
         command_bus=command_bus,
+        bridge_session_id=bridge_session_id,
+        scenario_name=scenario_name or settings.scenario.default,
     )
     sio.register_namespace(frontend_ns)
     sio.register_namespace(agent_ns)
@@ -84,7 +86,6 @@ def build_app(
     app["focus"] = focus
     app["camera_manager"] = camera_manager
     app["command_bus"] = command_bus
-    app["agent_link"] = agent_link
     app["frontend_ns"] = frontend_ns
     app["agent_ns"] = agent_ns
     app["shutdown_event"] = shutdown_event
@@ -100,6 +101,7 @@ def build_app(
         "/webrtc/{camera_id}", signaling_route(camera_manager, event_log)
     )
     app.router.add_get("/video_feed", mjpeg_route(camera_manager))
+    register_scenario_routes(app)
 
     return app, sio
 
@@ -162,7 +164,6 @@ async def _healthz(request: web.Request) -> web.Response:
         "config": {
             "carla_map": settings.carla.map,
             "tick_hz": round(1.0 / settings.carla.fixed_delta_seconds, 1),
-            "agent_mode": settings.agent.mode,
             "scenario_default": settings.scenario.default,
         },
         "metrics": m,

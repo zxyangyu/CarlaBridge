@@ -369,6 +369,7 @@ CarlaBridge 内部维护：
 | D7 | 鸟瞰摄像头实现 | **简单优先**，用 CARLA spectator 视角或固定高空相机，后期再调 |
 | D8 | 状态 / 视频录制回放 | **不需要** |
 | D9 | UGV 自动驾驶实现（M6 真机验收后追加） | **不用 CARLA `BasicAgent`**，改用工程内的 `SimpleWaypointFollower`。原因：BasicAgent 在 sync mode + 多路 camera 真机环境下，`bounding_box` 等属性 RPC 会出现 30s 级 timeout（孤立测试无问题）；推测是 camera listener 在 CARLA 内部线程持锁与 BasicAgent 的高频 RPC 累积冲突。Follower 走 GRP 一次性建路径 + 每 tick 仅 `get_transform/get_velocity/apply_control` 三个 RPC，已在真机跑通 80m 直线 (~13 sim 秒到达)。代价：无避障 / 不识红绿灯 / 不考虑车道偏移——本期演示可接受。 |
+| D10 | Agent / Bridge 边界重构（2026-05-15 评审，refactor v0.3） | **Bridge 完全时间无关 + 8 条执行级命令 + 通用两阶段生命周期 + UrbanAgent 完全外部 + HTTP 触发 reset/ignite**。落地要点：① Bridge 不再驱动剧情，sim_time 触发的剧本（fire 自动点火、cooldown）全部移除；② 命令面收敛为 8 条 (`UAV_PATROL/UAV_GOTO/UAV_RTL/UAV_HOLD/UGV_GOTO/UGV_RTL/UGV_EXTINGUISH/UGV_STOP`)，反馈走 `sio.call` 同步 `accepted/rejected` + `command_status` 事件 (`completed/failed/cancelled/ongoing`)；③ 每 entity 同时只允许 1 条 in-flight 命令，新命令到达旧命令 `cancelled(reason="superseded")`；④ `carlabridge/agent/` 整目录与 `[agent] mode` 配置项删除，Bridge 永远等待远程 Agent 接入；测试用 `test_agent.py` 放在仓 root，外部独立进程跑；⑤ 新增 HTTP 控制面 `POST /scenario/fire` / `POST /scenario/reset` / `GET /scenario/status`；reset = `teardown() + setup()`，CARLA `actor_id` 可变，entity_id 稳定，FrameQueue 实例保留；⑥ `state.snapshot` 新增 `run_id` / `bridge_session_id` / `incidents[]` / `in_flight_commands[]` 字段。**与既有决议关系**：废弃 D2（mock 写死剧本不再适用）；保留 D3（EXTINGUISH 仅做距离判定 + actor destroy，不做机械臂）、D9（UGV_GOTO/RTL 仍走 SimpleWaypointFollower）。**详细规范**：见 `design-refactor-agent-boundary.md` v0.3 §3 / §5 / §6。 |
 
 ---
 

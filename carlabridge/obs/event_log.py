@@ -31,6 +31,10 @@ class Event:
     severity: Severity
     source: Source
     message: str
+    # Optional correlation with a command lifecycle. Design §3.5 / §4.4:
+    # set on log lines emitted alongside a ``command_status`` event so the
+    # Agent / frontend can join human-readable narration to the wire status.
+    cmd_id: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -52,12 +56,15 @@ class EventLog:
         source: Source,
         message: str,
         ts: float | None = None,
+        *,
+        cmd_id: str | None = None,
     ) -> Event:
         evt = Event(
             ts=ts if ts is not None else time.time(),
             severity=severity,
             source=source,
             message=message,
+            cmd_id=cmd_id,
         )
         with self._lock:
             self._buf.append(evt)

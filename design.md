@@ -190,27 +190,33 @@ Async Loop (10 Hz broadcaster task):
 
 ### 5.3 控制流（Agent → CARLA）
 
+> **【superseded by `design-refactor-agent-boundary.md` v0.3 §3.4 / §6】**
+> v0.1 的 emit + agent_ack/agent_reject 双向异步路径已被两阶段反馈取代：
+> - 阶段 A（同步）：`await sio.call('agent.command', envelope, namespace='/agent')` → 直接 return `{status:"accepted"|"rejected", cmd_id, reason?, detail?}`
+> - 阶段 B（异步）：sim 域执行进度通过 `command_status` 事件广播（`completed / failed / cancelled / ongoing`）
+> 详细生命周期、reason 枚举、supersede 流程见 refactor 文档 §3.4 / §6.4。`agent_ack` / `agent_reject` 事件已废弃。
+
 ```
 Agent (Socket.IO client on /agent)
-       │  emit('agent_command', {id, target, text, payload})
+       │  await sio.call('agent.command', envelope, namespace='/agent', timeout=…)
        ▼
-agent_ns.py handler (async)
+agent_ns.py handler (async, return-value 形式)
        │
-       │  cmd = CommandDispatcher.parse(payload)
-       │  command_queue.put_nowait(cmd)              ← 跨域投递
+       │  cmd = CommandDispatcher.parse(payload)   ← 失败抛 RejectCommand → 直接 return rejected
+       │  if scenario._resetting: return {status:"rejected", reason:"scenario_resetting"}
+       │  ok = command_bus.submit(cmd)             ← 跨域投递；False → return overloaded
+       │  return {status:"accepted", cmd_id, queued_at_sim_time}
        │
        ▼
 Tick Thread (开始下一个 tick 前)
   while not command_queue.empty():
       cmd = command_queue.get_nowait()
-      try:
-          scenario.on_command(cmd)
-          ack(cmd.id)                                ← call_soon_threadsafe
-      except Reject as r:
-          reject(cmd.id, r.reason)
+      scenario.on_command(cmd)                     ← 内部 _accept_command + supersede + dispatch
+  # 每 tick 末扫 _in_flight，完成/失败/取消时
+  # call_soon_threadsafe(broadcast_command_status, payload)
 ```
 
-ack/reject 通过 `loop.call_soon_threadsafe(sio.emit, ...)` 回到 async 域，再扇出到前端 + Agent。
+完成态广播 `command_status` 通过 `loop.call_soon_threadsafe(sio.emit, ..., namespace='/agent')` 回到 async 域，扇出到所有 `/agent` 订阅者。
 
 ### 5.4 前端「命令建议」路径
 
@@ -284,6 +290,12 @@ class S1FireScenario(Scenario):
 ---
 
 ## 8. 场景引擎设计
+
+> **【部分 superseded by `design-refactor-agent-boundary.md` v0.3 §6 / §7.2】**
+> §8.1 Scenario 基类的 `mock_agent_loop` 入口、§8.2 `S1FireScenario` 中的 `SCRIPT` 列表 / `mock_agent_loop` 实现、§8.3 中"启动 mock_agent_loop"步骤**全部废弃**。
+> Bridge 不再以 sim_time 触发任何剧本；命令完全由外部 Agent（或本仓 root 的 `test_agent.py`）通过 sio.call 下发。
+> 重构后 `S1FireScenario` 的内部状态（`_in_flight`、`_in_flight_by_entity`、`fleet.origins`、`fleet.incidents`、`_run_id`、`_resetting`）与 `on_command` / `on_tick_post` / `ignite_fire` / `reset` 公共方法见 refactor 文档 §6 / §7.2。
+> §8.4 实体实现细节（虚拟 UAV / SimpleWaypointFollower UGV / 红绿灯 / 火灾标记）**保留有效**。
 
 ### 8.1 Scenario 基类
 
@@ -375,6 +387,11 @@ class S1FireScenario(Scenario):
 
 ## 9. Mock vs 真实 Agent
 
+> **【整节 superseded by `design-refactor-agent-boundary.md` v0.3 §1 / §7.6】**
+> Mock Agent / `AgentLink` 抽象 / `agent.mode = "mock" | "remote"` 配置项已**全部废弃**。
+> `carlabridge/agent/` 整目录已删除。Bridge 永远以"等远程 Agent 接入"模式运行；本仓 root 的 `test_agent.py` 是一个独立的外部 Socket.IO 客户端，与真实 UrbanAgent 走完全相同的协议路径（见 refactor 文档 §8.1 与本仓 README §3）。
+> 下文示意图与配置开关仅作历史参考。
+
 ```
 ┌──────────────────────────┐
 │       AgentLink          │  ← 抽象接口（async）
@@ -409,8 +426,13 @@ Broadcaster 在两种模式下都广播 `state_snapshot` 到 `/agent` namespace 
 | `POST /webrtc/<cam_id>` | HTTP JSON | WebRTC SDP offer/answer |
 | `GET /video_feed?camera=<cam_id>` | MJPEG | 兜底 |
 | `GET /healthz` | HTTP | 健康检查（CARLA 连接、tick fps、订阅者数量） |
+| `POST /scenario/fire` | HTTP JSON | **operator 点火**：spawn fire actor + 注入 `Incident`（详见 refactor §5.1） |
+| `POST /scenario/reset` | HTTP JSON | **operator reset**：teardown + setup，cancel 所有 in-flight，run_id +1（refactor §5.2） |
+| `GET /scenario/status` | HTTP JSON | scenario 当前状态：incidents / in_flight_commands / entities / origins（refactor §5.3） |
 
 CORS：开发期允许 `http://localhost:5173`（前端 vite dev）。
+
+> Socket.IO `/agent` namespace 事件清单（重构后）：服务端推 `state.snapshot` / `command_status` / `scenario_event` / `event_log`，客户端发 `hello` + RPC `agent.command`。详见 `design-refactor-agent-boundary.md` v0.3 §4。
 
 ---
 

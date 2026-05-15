@@ -462,5 +462,5 @@ R10 系列：收尾并行
 ## 14. 风险提醒
 
 - **R4-04 reset = teardown + setup** 是最高风险任务：相机重绑、actor_id 变化、`fleet.origins` 重写必须在同一 tick 内原子完成；建议先用 FakeWorld 单测，再 CARLA 联跑
-- **R5-01 sio.call return** 依赖 python-socketio 版本；先 `python -c "import socketio; print(socketio.__version__)"` 锁定 ≥ 5.x
+- **R5-01 sio.call return** 依赖 python -socketio 版本；先 `python -c "import socketio; print(socketio.__version__)"` 锁定 ≥ 5.x
 - **R9-02 端到端冒烟**会暴露所有边界问题：可能需要回到 R4 / R5 / R6 修小 bug；预留 buffer

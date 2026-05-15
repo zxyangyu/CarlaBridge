@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from carlabridge.core.fleet import CarlaActorMember, Fleet, Pose, VirtualMember
+from carlabridge.core.incident import Incident
 from carlabridge.core.snapshot import SnapshotBuilder, WorldSnapshot
 from tests.fakes.fake_world import FakeActor, FakeTrafficLight, FakeWorld
 
@@ -96,6 +97,91 @@ def test_snapshot_to_dict_jsonable():
     assert d["uavs"][0]["id"] == "UAV-01"
     # Tuples become lists in asdict — both are JSON-serializable.
     assert isinstance(d["traffic_lights"][0]["pose"], (tuple, list))
+
+
+# ---- R2 additions: run_id / session / incidents / in_flight ------------
+
+
+def test_snapshot_defaults_for_new_fields():
+    snap = SnapshotBuilder(world=FakeWorld()).build(Fleet(), sim_time=0)
+    assert snap.run_id == 0
+    assert snap.bridge_session_id == ""
+    assert snap.incidents == []
+    assert snap.in_flight_commands == []
+
+
+def test_snapshot_carries_run_id_and_session():
+    snap = SnapshotBuilder(world=FakeWorld()).build(
+        Fleet(), sim_time=0,
+        run_id=7, bridge_session_id="br-deadbeef",
+    )
+    assert snap.run_id == 7
+    assert snap.bridge_session_id == "br-deadbeef"
+    d = snap.to_dict()
+    assert d["run_id"] == 7
+    assert d["bridge_session_id"] == "br-deadbeef"
+
+
+def test_snapshot_incidents_from_fleet_sorted_by_id():
+    fleet = Fleet()
+    # Insert out of order; snapshot must come back sorted.
+    fleet.add_incident(Incident(id="fire-002", kind="fire",
+                                position=Pose(50, 0, 0), severity="low",
+                                since_sim_time=4.0))
+    fleet.add_incident(Incident(id="fire-001", kind="fire",
+                                position=Pose(90, 0, 0), severity="high",
+                                since_sim_time=1.5))
+    snap = SnapshotBuilder(world=FakeWorld()).build(fleet, sim_time=10.0)
+    assert [i.id for i in snap.incidents] == ["fire-001", "fire-002"]
+
+
+def test_snapshot_incidents_wire_shape():
+    fleet = Fleet()
+    fleet.add_incident(Incident(id="fire-001", kind="fire",
+                                position=Pose(90, 1, 2), severity="high",
+                                since_sim_time=1.5))
+    snap = SnapshotBuilder(world=FakeWorld()).build(fleet, sim_time=10.0)
+    d = snap.to_dict()
+    assert len(d["incidents"]) == 1
+    inc = d["incidents"][0]
+    # No yaw/pitch/roll leak through position — to_wire strips Pose Euler.
+    assert inc["position"] == {"x": 90, "y": 1, "z": 2}
+    assert inc["id"] == "fire-001"
+    assert inc["severity"] == "high"
+    assert inc["since_sim_time"] == 1.5
+
+
+def test_snapshot_in_flight_commands_passed_through_in_order():
+    in_flt = [
+        {"cmd_id": "cmd-a", "kind": "UAV_PATROL", "target": "UAV-01",
+         "accepted_at_sim_time": 1.0},
+        {"cmd_id": "cmd-b", "kind": "UGV_GOTO", "target": "UGV-01",
+         "accepted_at_sim_time": 1.5, "progress": 0.2},
+    ]
+    snap = SnapshotBuilder(world=FakeWorld()).build(
+        Fleet(), sim_time=2.0, in_flight_commands=in_flt,
+    )
+    assert [c["cmd_id"] for c in snap.in_flight_commands] == ["cmd-a", "cmd-b"]
+    # Builder must copy, not alias.
+    in_flt.append({"cmd_id": "cmd-c"})
+    assert len(snap.in_flight_commands) == 2
+
+
+def test_snapshot_to_dict_field_order_stable():
+    snap = SnapshotBuilder(world=FakeWorld()).build(
+        Fleet(), sim_time=1.0, run_id=3, bridge_session_id="br-x",
+    )
+    keys = list(snap.to_dict().keys())
+    assert keys == [
+        "sim_time",
+        "run_id",
+        "bridge_session_id",
+        "traffic_lights",
+        "vehicles",
+        "uavs",
+        "incidents",
+        "in_flight_commands",
+    ]
 
 
 def test_refresh_lights_rescans():

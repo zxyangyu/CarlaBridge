@@ -23,7 +23,7 @@ import logging
 import sys
 import threading
 import time
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Callable, Protocol
 
 from carlabridge.commands.enum import RejectCommand
 from carlabridge.core.atomic import AtomicRef
@@ -123,6 +123,8 @@ class TickLoop:
         camera_manager: "CameraManager | None" = None,
         command_bus: "CommandBus | None" = None,
         behind_warn_threshold: float = 1.5,
+        bridge_session_id: str = "",
+        sim_task_drain: "Callable[[], None] | None" = None,
     ) -> None:
         self._world = world
         self._clock = clock
@@ -135,6 +137,8 @@ class TickLoop:
         self._camera_manager = camera_manager
         self._command_bus = command_bus
         self._behind_warn_threshold = behind_warn_threshold
+        self._bridge_session_id = bridge_session_id
+        self._sim_task_drain = sim_task_drain
 
         self._shutdown = threading.Event()
         self._thread: threading.Thread | None = None
@@ -194,34 +198,56 @@ class TickLoop:
                          self._clock.sim_time, self._clock.tick_count)
 
     def _one_iteration(self) -> None:
-        # 1. drain commands → scenario.on_command, ack/reject through CommandBus
+        # 1. drain commands → scenario.on_command
+        #
+        # R1 transitional: accept/reject is the sio.call return value (handled
+        # in agent_ns starting in R5); command_status events for completion /
+        # failure flow through the scenario's _finalize_command path (R3+).
+        # In R1 we just log here so misuse stays visible during the rewrite.
         if self._command_bus is not None:
             for cmd in self._command_bus.drain():
                 try:
                     self._scenario.on_command(cmd)
                 except RejectCommand as r:
-                    self._command_bus.reject(
-                        cmd.id, target=cmd.target, reason=str(r)
+                    log.info(
+                        "scenario rejected %s target=%s reason=%s detail=%s",
+                        cmd.id, cmd.target, r.reason, r.detail,
                     )
+                    self._event_log.add(
+                        "warn", "SCENARIO",
+                        f"reject {cmd.id} target={cmd.target} reason={r.reason}",
+                    )
+                    self._command_bus.forget(cmd.id)
                 except Exception as e:
                     log.exception("scenario.on_command raised")
-                    self._command_bus.reject(
-                        cmd.id,
-                        target=cmd.target,
-                        reason=f"scenario error: {type(e).__name__}: {e}",
+                    self._event_log.add(
+                        "danger", "SCENARIO",
+                        f"error {cmd.id} target={cmd.target}: {type(e).__name__}: {e}",
                     )
-                else:
-                    self._command_bus.ack(cmd.id, target=cmd.target)
+                    self._command_bus.forget(cmd.id)
         # 2. pre-tick scenario hook
         self._scenario.on_tick_pre(self._clock.sim_time)
         # 3. advance CARLA one step
         self._world.tick()
         # 4. advance bridge clock
         self._clock.advance()
-        # 5. build & publish WorldSnapshot (M2)
+        # 5. build & publish WorldSnapshot (M2; R5 threads session / run / in-flight)
         if self._snapshot_builder is not None and self._snapshot_ref is not None:
             try:
-                snap = self._snapshot_builder.build(self._fleet, self._clock.sim_time)
+                run_id = int(getattr(self._scenario, "_run_id", 0))
+                in_flight_snapshot = getattr(
+                    self._scenario, "in_flight_snapshot", None
+                )
+                in_flight = (
+                    in_flight_snapshot() if callable(in_flight_snapshot) else []
+                )
+                snap = self._snapshot_builder.build(
+                    self._fleet,
+                    self._clock.sim_time,
+                    run_id=run_id,
+                    bridge_session_id=self._bridge_session_id,
+                    in_flight_commands=in_flight,
+                )
                 self._snapshot_ref.set(snap)
             except Exception:
                 log.exception("snapshot build failed; tick continues")
@@ -231,6 +257,13 @@ class TickLoop:
                 self._camera_manager.update_followers(self._fleet)
             except Exception:
                 log.exception("camera update_followers failed; tick continues")
+        # 6.5 drain HTTP→sim tasks (R6-01); runs before on_tick_post so
+        # ignite_fire / reset land before the scenario's own per-tick logic.
+        if self._sim_task_drain is not None:
+            try:
+                self._sim_task_drain()
+            except Exception:
+                log.exception("sim task drain failed; tick continues")
         # 7. post-tick scenario hook
         self._scenario.on_tick_post(self._clock.sim_time)
         # 8. fps sampling
@@ -257,17 +290,17 @@ class TickLoop:
         else:
             self._behind_streak += 1
             # Sustained overrun for ~1s @ 30Hz = 30 frames behind threshold.
-            if elapsed > delta * self._behind_warn_threshold and (
-                self._behind_streak == 1 or self._behind_streak % 30 == 0
-            ):
-                log.warning(
-                    "tick behind schedule: cycle=%.1fms target=%.1fms (streak=%d)",
-                    elapsed * 1000,
-                    delta * 1000,
-                    self._behind_streak,
-                )
-                self._event_log.add(
-                    "warn",
-                    "BRIDGE",
-                    f"tick behind: {elapsed * 1000:.0f}ms vs target {delta * 1000:.0f}ms",
-                )
+            # if elapsed > delta * self._behind_warn_threshold and (
+            #     self._behind_streak == 1 or self._behind_streak % 30 == 0
+            # ):
+            #     log.warning(
+            #         "tick behind schedule: cycle=%.1fms target=%.1fms (streak=%d)",
+            #         elapsed * 1000,
+            #         delta * 1000,
+            #         self._behind_streak,
+            #     )
+            #     self._event_log.add(
+            #         "warn",
+            #         "BRIDGE",
+            #         f"tick behind: {elapsed * 1000:.0f}ms vs target {delta * 1000:.0f}ms",
+            #     )

@@ -1,12 +1,11 @@
 """Process entrypoint.
 
-M0: HTTP + Socket.IO skeleton.
-M1: + CARLA connection, sync mode, tick thread (NoopScenario placeholder).
-M2: + WorldSnapshot atomic ref + 10Hz broadcaster (state_update / state_snapshot).
-M3: + city camera (world_pose) + WebRTC signaling (POST /webrtc/{camera_id}).
-M4: + aerial/ground bindings + hot rebind.
-M5: + Scenario engine + S1 actor spawn.
-M6: + CommandBus + AgentLink + mock_agent_loop (end-to-end S1).
+History:
+  M0..M6 — initial milestones (HTTP, CARLA tick, snapshot/broadcaster,
+           cameras + WebRTC, scenario engine, command bus).
+  Refactor v0.3 — Agent / Bridge decoupling: Bridge waits passively for a
+           remote Agent over Socket.IO (no in-process mock); HTTP
+           ``/scenario/{fire,reset,status}`` control plane.
 
 Usage:
     python -m carlabridge.main [--config PATH] [--scenario NAME] [--log-level LVL]
@@ -19,12 +18,11 @@ import asyncio
 import logging
 import signal
 import sys
+import uuid
 from pathlib import Path
 
 from aiohttp import web
 
-from carlabridge.agent.mock_agent import MockAgentLink
-from carlabridge.agent.socketio_agent import SocketIOAgentLink
 from carlabridge.bus.broadcaster import Broadcaster
 from carlabridge.bus.projector import FocusBinding
 from carlabridge.bus.server import build_app, make_sio
@@ -108,7 +106,10 @@ async def _run(settings: Settings, *, no_carla: bool) -> int:
     event_log = EventLog(capacity=settings.logging.event_log_buffer)
     metrics = Metrics()
     fleet = Fleet()
-    event_log.add("ok", "BRIDGE", "CarlaBridge starting")
+    bridge_session_id = f"br-{uuid.uuid4().hex[:8]}"
+    event_log.add(
+        "ok", "BRIDGE", f"CarlaBridge starting (session={bridge_session_id})"
+    )
 
     # Snapshot infra is created up-front so the http server can hand it to
     # the namespaces (on_connect emits depend on it).
@@ -152,15 +153,11 @@ async def _run(settings: Settings, *, no_carla: bool) -> int:
             log.warning("--no-carla: HTTP/Socket.IO only, no tick loop")
             event_log.add("warn", "BRIDGE", "started in --no-carla mode")
 
-        # ---------- 2. HTTP + Socket.IO + CommandBus + AgentLink --------
+        # ---------- 2. HTTP + Socket.IO + CommandBus --------------------
         stop_event = asyncio.Event()
         loop = asyncio.get_running_loop()
         sio = make_sio(settings)
         command_bus = CommandBus(loop=loop, sio=sio, event_log=event_log)
-        if settings.agent.mode == "remote":
-            agent_link = SocketIOAgentLink(sio=sio, event_log=event_log)
-        else:
-            agent_link = MockAgentLink(command_bus=command_bus, event_log=event_log)
         app, sio = build_app(
             settings,
             event_log,
@@ -170,9 +167,31 @@ async def _run(settings: Settings, *, no_carla: bool) -> int:
             focus=focus,
             camera_manager=camera_manager,
             command_bus=command_bus,
-            agent_link=agent_link,
             shutdown_event=stop_event,
+            bridge_session_id=bridge_session_id,
+            scenario_name=settings.scenario.default,
         )
+        agent_ns = app["agent_ns"]
+
+        # Sim → async hop for command_status / scenario_event broadcasts.
+        # The scenario calls bus.broadcast_* on the tick thread; we schedule
+        # the actual socket emit onto the asyncio loop.
+        def _emit_command_status(payload: dict) -> None:
+            loop.call_soon_threadsafe(
+                sio.start_background_task,
+                agent_ns.broadcast_command_status,
+                payload,
+            )
+
+        def _emit_scenario_event(payload: dict) -> None:
+            loop.call_soon_threadsafe(
+                sio.start_background_task,
+                agent_ns.broadcast_scenario_event,
+                payload,
+            )
+
+        command_bus.set_on_command_status(_emit_command_status)
+        command_bus.set_on_scenario_event(_emit_scenario_event)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, settings.server.host, settings.server.port)
@@ -192,14 +211,14 @@ async def _run(settings: Settings, *, no_carla: bool) -> int:
                 return 3
             raise
         log.info(
-            "listening on http://%s:%d  (carla=%s:%d  map=%s  agent=%s  scenario=%s)",
+            "listening on http://%s:%d  (carla=%s:%d  map=%s  scenario=%s  session=%s)",
             settings.server.host,
             settings.server.port,
             settings.carla.host,
             settings.carla.port,
             settings.carla.map,
-            settings.agent.mode,
             settings.scenario.default,
+            bridge_session_id,
         )
         event_log.add(
             "ok",
@@ -241,6 +260,7 @@ async def _run(settings: Settings, *, no_carla: bool) -> int:
                 camera_manager=camera_manager,
                 event_log=event_log,
                 sim_time_provider=lambda c=clock: c.sim_time,
+                command_bus=command_bus,
             )
             try:
                 scenario = scenario_runner.start()
@@ -250,6 +270,9 @@ async def _run(settings: Settings, *, no_carla: bool) -> int:
                     "danger", "SCENARIO", f"setup failed: {type(e).__name__}: {e}"
                 )
                 return 5
+            # Late-wire scenario-aware providers into the agent namespace.
+            agent_ns.set_resetting_provider(scenario_runner.is_resetting)
+            agent_ns.set_sim_time_provider(scenario_runner.sim_time)
 
         # ---------- 5. tick thread --------------------------------------
         if world is not None:
@@ -265,18 +288,13 @@ async def _run(settings: Settings, *, no_carla: bool) -> int:
                 snapshot_ref=snapshot_ref,
                 camera_manager=camera_manager,
                 command_bus=command_bus,
+                bridge_session_id=bridge_session_id,
+                sim_task_drain=scenario_runner.drain_sim_tasks,
             )
             tick_loop.start()
             event_log.add(
                 "ok", "BRIDGE", f"tick loop running (scenario={scenario.name})"
             )
-
-            # Start the scenario's mock_agent_loop coroutine (no-op if the
-            # scenario doesn't define one or if agent.mode != "mock").
-            if settings.agent.mode == "mock" and scenario_runner is not None:
-                task = scenario_runner.start_mock_agent_task(agent_link)
-                if task is not None:
-                    event_log.add("ok", "AGENT", "mock_agent_loop started")
 
         # ---------- 6. broadcaster --------------------------------------
         broadcaster = Broadcaster(
@@ -313,12 +331,6 @@ async def _run(settings: Settings, *, no_carla: bool) -> int:
             _request_stop()
     finally:
         event_log.add("warn", "BRIDGE", "shutting down")
-        # 8a. cancel mock_agent_loop FIRST so it can't fire any more commands
-        if scenario_runner is not None:
-            try:
-                await scenario_runner.stop_mock_agent_task()
-            except Exception:
-                log.exception("stop_mock_agent_task failed")
         # 8b. stop broadcaster before HTTP teardown
         if broadcaster is not None:
             await broadcaster.stop()

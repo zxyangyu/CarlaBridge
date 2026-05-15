@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Literal, Protocol
 if TYPE_CHECKING:  # pragma: no cover -- avoid hard import of `carla` at type-check time
     import carla
 
+    from carlabridge.core.incident import Incident
+
 # Role enums. Kept as plain str literals for forward-compat with config / scripts.
 Role = Literal[
     "patrol",        # UAV cruising on assigned waypoints
@@ -133,15 +135,25 @@ class VirtualMember:
 
 
 class Fleet:
-    """Thread-safe registry of entities indexed by entity_id."""
+    """Thread-safe registry of entities indexed by entity_id.
+
+    Refactor v0.3 (design §6.1): also owns
+    - ``origins[entity_id] → Pose``: where each entity should return to on
+      ``*_RTL``; written by the scenario during ``setup()``.
+    - ``incidents[id] → Incident``: active fire events. No ``status`` field —
+      membership is itself the active signal (design §4.1).
+    """
 
     def __init__(self) -> None:
         self._members: dict[str, CarlaActorMember | VirtualMember] = {}
+        self._origins: dict[str, Pose] = {}
+        self._incidents: dict[str, "Incident"] = {}
         self._lock = RLock()
 
     # ---- registration ---------------------------------------------------
 
     def register(self, member: CarlaActorMember | VirtualMember) -> None:
+        # Origin is NOT written here — scenario.setup decides explicitly.
         with self._lock:
             if member.entity_id in self._members:
                 raise ValueError(f"entity_id already registered: {member.entity_id}")
@@ -149,11 +161,54 @@ class Fleet:
 
     def unregister(self, entity_id: str) -> CarlaActorMember | VirtualMember | None:
         with self._lock:
+            self._origins.pop(entity_id, None)
             return self._members.pop(entity_id, None)
 
     def clear(self) -> None:
         with self._lock:
             self._members.clear()
+            self._origins.clear()
+            self._incidents.clear()
+
+    # ---- origins (design §3.2 *_RTL / §5.2 reset) ----------------------
+
+    def set_origin(self, entity_id: str, pose: Pose) -> None:
+        with self._lock:
+            self._origins[entity_id] = pose
+
+    def get_origin(self, entity_id: str) -> Pose | None:
+        with self._lock:
+            return self._origins.get(entity_id)
+
+    def origins(self) -> dict[str, Pose]:
+        """Snapshot (copy) of the origin map. Safe to iterate without lock."""
+        with self._lock:
+            return dict(self._origins)
+
+    # ---- incidents (design §4.1) ---------------------------------------
+
+    def add_incident(self, incident: "Incident") -> None:
+        with self._lock:
+            if incident.id in self._incidents:
+                raise ValueError(f"incident_id already exists: {incident.id}")
+            self._incidents[incident.id] = incident
+
+    def remove_incident(self, incident_id: str) -> "Incident | None":
+        with self._lock:
+            return self._incidents.pop(incident_id, None)
+
+    def get_incident(self, incident_id: str) -> "Incident | None":
+        with self._lock:
+            return self._incidents.get(incident_id)
+
+    def incidents(self) -> dict[str, "Incident"]:
+        """Snapshot (copy) of active incidents."""
+        with self._lock:
+            return dict(self._incidents)
+
+    def clear_incidents(self) -> None:
+        with self._lock:
+            self._incidents.clear()
 
     # ---- query ----------------------------------------------------------
 

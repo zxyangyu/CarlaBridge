@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 from carlabridge.core.fleet import CarlaActorMember, Fleet, Pose, VirtualMember
+from carlabridge.core.incident import Incident
 
 if TYPE_CHECKING:  # pragma: no cover
     import carla
@@ -66,10 +67,37 @@ class WorldSnapshot:
     traffic_lights: list[TrafficLightState] = field(default_factory=list)
     vehicles: list[VehicleState] = field(default_factory=list)
     uavs: list[UavState] = field(default_factory=list)
+    # Refactor v0.3 (design §4.1) ---------------------------------------
+    # Run / session identifiers help the Agent distinguish a scenario reset
+    # (run_id +1, bridge_session_id stable) from a Bridge restart (session
+    # changes too). Defaults so legacy builders / tests keep working.
+    run_id: int = 0
+    bridge_session_id: str = ""
+    # `incidents` mirrors fleet.incidents — sorted by id for stable wire diff.
+    incidents: list[Incident] = field(default_factory=list)
+    # `in_flight_commands` echoes the scenario's accepted-but-not-finalized
+    # commands so the Agent can reconcile a dropped command_status event.
+    # Entries are already wire-shape dicts; the scenario builds them.
+    in_flight_commands: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        """JSON-ready full payload — used directly by `for_agent`."""
-        return asdict(self)
+        """JSON-ready full payload — used directly by ``for_agent``.
+
+        Field order is stable (design §4.1) so wire-level diffs against
+        captured payloads stay readable. Incidents go through
+        :meth:`Incident.to_wire` rather than ``asdict`` so the Pose's
+        yaw/pitch/roll do not leak into ``position``.
+        """
+        return {
+            "sim_time": self.sim_time,
+            "run_id": self.run_id,
+            "bridge_session_id": self.bridge_session_id,
+            "traffic_lights": [asdict(t) for t in self.traffic_lights],
+            "vehicles": [asdict(v) for v in self.vehicles],
+            "uavs": [asdict(u) for u in self.uavs],
+            "incidents": [inc.to_wire() for inc in self.incidents],
+            "in_flight_commands": list(self.in_flight_commands),
+        }
 
 
 # ---------- builder -------------------------------------------------------
@@ -142,12 +170,31 @@ class SnapshotBuilder:
         """Drop the traffic-light cache; next build() rescans."""
         self._tl_cache = []
 
-    def build(self, fleet: Fleet, sim_time: float) -> WorldSnapshot:
+    def build(
+        self,
+        fleet: Fleet,
+        sim_time: float,
+        *,
+        run_id: int = 0,
+        bridge_session_id: str = "",
+        in_flight_commands: list[dict] | None = None,
+    ) -> WorldSnapshot:
+        """Build a :class:`WorldSnapshot`.
+
+        ``run_id`` / ``bridge_session_id`` / ``in_flight_commands`` are R2
+        additions per design §4.1. They default so callers that don't yet
+        have a runner / scenario wired in (tests, --no-carla mode) keep
+        working unchanged.
+        """
         return WorldSnapshot(
             sim_time=sim_time,
             traffic_lights=self._read_traffic_lights(),
             vehicles=self._read_vehicles(fleet),
             uavs=self._read_uavs(fleet),
+            run_id=run_id,
+            bridge_session_id=bridge_session_id,
+            incidents=self._read_incidents(fleet),
+            in_flight_commands=list(in_flight_commands or []),
         )
 
     # ---- internals -----------------------------------------------------
@@ -200,6 +247,10 @@ class SnapshotBuilder:
                 log.debug("vehicle read failed for %s: %s", m.entity_id, e)
                 continue
         return out
+
+    def _read_incidents(self, fleet: Fleet) -> list[Incident]:
+        # Stable order: sort by id so wire-diff stays readable.
+        return [inc for _id, inc in sorted(fleet.incidents().items())]
 
     def _read_uavs(self, fleet: Fleet) -> list[UavState]:
         out: list[UavState] = []

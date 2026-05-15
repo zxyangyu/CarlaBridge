@@ -55,7 +55,10 @@
       "Bash(./.venv/python.exe -c \"from carlabridge.scenarios.waypoint_follower import SimpleWaypointFollower; print\\('import ok'\\); print\\('has set_destination:', hasattr\\(SimpleWaypointFollower, 'set_destination'\\)\\)\")",
       "Bash(./.venv/python.exe -m pytest tests/ -q)",
       "PowerShell(Get-ChildItem 'D:\\\\Urban_v2\\\\CarlaBridge\\\\carlabridge' -Recurse -Depth 3 | Where-Object { -not $_.PSIsContainer -and $_.Extension -in '.py','.md','.yaml','.yml','.json','.toml' } | Select-Object FullName | Format-Table -AutoSize)",
-      "Bash(dir D:Urban_v2CarlaBridge *)"
+      "Bash(dir D:Urban_v2CarlaBridge *)",
+      "Bash(echo \"main pid: $!\")",
+      "Bash(curl -s -X POST http://127.0.0.1:5000/admin/shutdown -o /dev/null)",
+      "Bash(powershell *)"
     ]
   }
 }

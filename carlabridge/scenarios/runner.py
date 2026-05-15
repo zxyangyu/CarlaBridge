@@ -1,26 +1,26 @@
 """ScenarioRunner — owns one Scenario's lifecycle.
 
-M5 scope (current):
-- construct from class + deps
-- start() runs scenario.setup() on the caller's thread (main, pre-tick-thread)
-- stop() runs scenario.teardown()
-- exposes `state` and `sim_time_provider` (the latter for M6 mock_agent_loop).
+Responsibilities:
 
-M6 will extend with:
-- async start of `scenario.mock_agent_loop(link)` (cancellable task)
-- failure propagation so the broadcaster can publish `event_log` danger
+* construct from a registered scenario class + dependencies
+* :meth:`start` runs ``scenario.setup`` on the caller's thread (main,
+  pre-tick-thread)
+* :meth:`stop` runs ``scenario.teardown``
+* :meth:`run_in_sim_domain` lets HTTP routes hop into the tick thread and
+  await the result on the calling event loop
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Callable, Literal
+import queue
+from typing import TYPE_CHECKING, Any, Callable, Literal
 
 from carlabridge.scenarios.base import Scenario
 
 if TYPE_CHECKING:  # pragma: no cover
-    from carlabridge.agent.link import AgentLink
+    from carlabridge.commands.bus import CommandBus
     from carlabridge.core.fleet import Fleet
     from carlabridge.core.world import World
     from carlabridge.obs.event_log import EventLog
@@ -43,6 +43,7 @@ class ScenarioRunner:
         camera_manager: "CameraManager",
         event_log: "EventLog",
         sim_time_provider: Callable[[], float] = lambda: 0.0,
+        command_bus: "CommandBus | None" = None,
     ) -> None:
         self._scenario_cls = scenario_cls
         self._world = world
@@ -50,10 +51,14 @@ class ScenarioRunner:
         self._camera_manager = camera_manager
         self._event_log = event_log
         self._sim_time = sim_time_provider
+        self._command_bus = command_bus
         self._state: State = "idle"
         self._scenario: Scenario | None = None
         self._failure: BaseException | None = None
-        self._mock_task: asyncio.Task | None = None
+        # R6-01 cross-domain task queue: HTTP routes push callables here and
+        # await an asyncio.Future; the tick thread drains the queue once per
+        # tick (TickLoop calls :meth:`drain_sim_tasks`).
+        self._sim_tasks: queue.Queue[tuple[Callable[[], Any], asyncio.Future, asyncio.AbstractEventLoop]] = queue.Queue()
 
     # ---- accessors ----------------------------------------------------
 
@@ -84,9 +89,10 @@ class ScenarioRunner:
             fleet=self._fleet,
             camera_manager=self._camera_manager,
             event_log=self._event_log,
+            command_bus=self._command_bus,
         )
-        # Inject sim_time provider for scenarios that gate on sim_time
-        # (e.g. S1's mock_agent_loop).
+        # Inject sim_time provider so the scenario can stamp incidents /
+        # in-flight commands with the current sim_time.
         if hasattr(self._scenario, "attach_sim_time_provider"):
             self._scenario.attach_sim_time_provider(self._sim_time)
         try:
@@ -125,44 +131,54 @@ class ScenarioRunner:
             return
         self._state = "stopped"
 
-    # ---- mock-agent task lifecycle (M6) --------------------------------
-
-    def start_mock_agent_task(self, link: "AgentLink") -> asyncio.Task | None:
-        """Spawn `scenario.mock_agent_loop(link)` as an asyncio task.
-
-        No-op if the scenario doesn't define `mock_agent_loop`. Idempotent —
-        repeat calls return the existing task.
-        """
-        if self._scenario is None:
-            return None
-        if self._mock_task is not None and not self._mock_task.done():
-            return self._mock_task
-        if not hasattr(self._scenario, "mock_agent_loop"):
-            return None
-        coro = self._scenario.mock_agent_loop(link)
-        self._mock_task = asyncio.create_task(
-            coro, name=f"mock-agent-{self._scenario_cls.name}"
-        )
-        return self._mock_task
-
-    async def stop_mock_agent_task(self) -> None:
-        if self._mock_task is None:
-            return
-        if not self._mock_task.done():
-            self._mock_task.cancel()
-        try:
-            await self._mock_task
-        except (asyncio.CancelledError, Exception):
-            pass
-        self._mock_task = None
-
-    @property
-    def mock_task(self) -> asyncio.Task | None:
-        return self._mock_task
-
     @property
     def failure(self) -> BaseException | None:
         return self._failure
+
+    # ---- cross-domain task primitive (R6-01) --------------------------
+
+    def run_in_sim_domain(
+        self, fn: Callable[..., Any], *args, **kwargs
+    ) -> asyncio.Future:
+        """Schedule ``fn(*args, **kwargs)`` to run on the tick (sim) thread
+        and return an asyncio.Future that resolves on the calling event loop.
+
+        Must be called from async-domain code (HTTP handlers). The future
+        resolves on the **same loop** the call happened on, so awaiting it is
+        safe.
+
+        Exceptions raised by ``fn`` are propagated via
+        :meth:`asyncio.Future.set_exception`.
+        """
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        self._sim_tasks.put_nowait((lambda: fn(*args, **kwargs), future, loop))
+        return future
+
+    def drain_sim_tasks(self) -> None:
+        """Drain the run_in_sim_domain queue. Called by the tick thread once
+        per tick; never raises (each task error becomes future.set_exception)."""
+        while True:
+            try:
+                task, future, loop = self._sim_tasks.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                result = task()
+            except BaseException as e:  # noqa: BLE001 — propagate to async side
+                log.exception("sim task raised; routing to future.set_exception")
+                if not future.done():
+                    loop.call_soon_threadsafe(future.set_exception, e)
+            else:
+                if not future.done():
+                    loop.call_soon_threadsafe(future.set_result, result)
+
+    def is_resetting(self) -> bool:
+        """Read-through to scenario._resetting for the namespaces / routes
+        that need to gate on it without owning a scenario reference."""
+        if self._scenario is None:
+            return False
+        return bool(getattr(self._scenario, "_resetting", False))
 
 
 __all__ = ["ScenarioRunner", "State"]

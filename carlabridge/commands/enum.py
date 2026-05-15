@@ -1,12 +1,19 @@
 """Command enums + parsed dataclass + RejectCommand exception.
 
-The wire format from `/agent` is:
-    {"id": "cmd-9f1", "target": "UGV-01", "priority": "high",
-     "text": "UGV_DISPATCH", "payload": {"lat": 31.23, "lng": 121.47}}
+Wire format from `/agent` (refactor v0.3, design §3.1)::
 
-`text` is parsed into a CommandKind. Scenarios receive `ParsedCommand` and
-raise `RejectCommand(reason)` to refuse — that translates to `agent_reject`
-on the wire.
+    {
+      "id": "cmd-9f1",
+      "target": "UAV-01",
+      "kind": "UAV_GOTO",
+      "priority": "normal",
+      "params": {"waypoint": {"x":..,"y":..,"z":..}, "cruise_speed": 8.0}
+    }
+
+`kind` parses into a :class:`CommandKind`. Scenarios receive
+:class:`ParsedCommand`. Refusal happens by raising
+``RejectCommand(reason, detail=...)`` — these become the ``rejected`` sio.call
+return value (see design §3.3).
 """
 
 from __future__ import annotations
@@ -17,22 +24,31 @@ from typing import Any
 
 
 class CommandKind(str, Enum):
-    # UAV (virtual entities)
+    # UAV (virtual entities) — design §3.2
+    UAV_PATROL = "UAV_PATROL"
+    UAV_GOTO = "UAV_GOTO"
     UAV_RTL = "UAV_RTL"
     UAV_HOLD = "UAV_HOLD"
     # UGV (real CARLA actors)
-    UGV_DISPATCH = "UGV_DISPATCH"
+    UGV_GOTO = "UGV_GOTO"
     UGV_RTL = "UGV_RTL"
-    # Misc
-    MARK_EVENT = "MARK_EVENT"
-    ATTACH_ACTOR = "ATTACH_ACTOR"  # D3: parsed but no-op this milestone
+    UGV_EXTINGUISH = "UGV_EXTINGUISH"
+    UGV_STOP = "UGV_STOP"
 
-    @classmethod
-    def from_text(cls, text: str) -> "CommandKind":
-        try:
-            return cls(text)
-        except ValueError as e:
-            raise RejectCommand(f"unknown command text: {text!r}") from e
+
+UAV_KINDS: frozenset[CommandKind] = frozenset({
+    CommandKind.UAV_PATROL,
+    CommandKind.UAV_GOTO,
+    CommandKind.UAV_RTL,
+    CommandKind.UAV_HOLD,
+})
+
+UGV_KINDS: frozenset[CommandKind] = frozenset({
+    CommandKind.UGV_GOTO,
+    CommandKind.UGV_RTL,
+    CommandKind.UGV_EXTINGUISH,
+    CommandKind.UGV_STOP,
+})
 
 
 Priority = str  # "normal" | "high" | "urgent" — kept as str for forward compat.
@@ -42,22 +58,40 @@ Priority = str  # "normal" | "high" | "urgent" — kept as str for forward compa
 class ParsedCommand:
     id: str
     kind: CommandKind
-    target: str  # entity_id (UAV-01, UGV-01, ...) — may be "" for non-targeted
+    target: str
     priority: Priority = "normal"
-    payload: dict[str, Any] = field(default_factory=dict)
-
-    def to_ack(self, *, latency_ms: int = 0) -> dict:
-        return {"id": self.id, "target": self.target, "latency_ms": latency_ms}
-
-    def to_reject(self, reason: str) -> dict:
-        return {"id": self.id, "target": self.target, "reason": reason}
+    params: dict[str, Any] = field(default_factory=dict)
 
 
 class RejectCommand(Exception):
-    """Raised inside `dispatcher.parse` or `scenario.on_command` to indicate
-    the command should be rejected. The string message becomes the reject
-    payload's `reason` field.
+    """Raised by ``dispatcher.parse`` or ``scenario.on_command`` to refuse a
+    command. Carries a machine-readable ``reason`` (see design §3.3 reason
+    enum: ``parse_error`` / ``unknown_target`` / ``kind_target_mismatch`` /
+    ``unknown_incident`` / ``not_in_range`` / ``no_origin`` /
+    ``scenario_resetting`` / ``overloaded`` / ``internal_error``) and an
+    optional ``detail`` dict.
     """
 
+    def __init__(self, reason: str, detail: dict | None = None) -> None:
+        super().__init__(reason)
+        self.reason: str = reason
+        self.detail: dict = dict(detail) if detail else {}
 
-__all__ = ["CommandKind", "ParsedCommand", "RejectCommand", "Priority"]
+    def __str__(self) -> str:
+        if self.detail:
+            return f"{self.reason} {self.detail}"
+        return self.reason
+
+    def to_payload(self) -> dict:
+        """Build the ``rejected`` shape returned by ``sio.call`` (design §3.3)."""
+        return {"reason": self.reason, "detail": self.detail or None}
+
+
+__all__ = [
+    "CommandKind",
+    "UAV_KINDS",
+    "UGV_KINDS",
+    "ParsedCommand",
+    "Priority",
+    "RejectCommand",
+]

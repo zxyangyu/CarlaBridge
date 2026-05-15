@@ -19,7 +19,13 @@ def test_default_config_loads():
     assert cfg.carla.fixed_delta_seconds == pytest.approx(0.0333)
     assert cfg.server.port == 5000
     assert cfg.broadcast.state_hz == 10.0
-    assert cfg.agent.mode == "mock"
+    assert cfg.scenario.default == "s1_fire"
+
+
+def test_agent_cfg_removed():
+    """Refactor v0.3 — `[agent]` section + AgentCfg are gone."""
+    cfg = load_settings()
+    assert not hasattr(cfg, "agent")
 
 
 def test_default_config_path_exists():
