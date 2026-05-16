@@ -27,9 +27,9 @@
 | OS | Windows 10 | (Linux 未验证；Win 多媒体定时器 + CARLA Python API 兼容) |
 | Python | 3.12 | 锁定，由 CARLA 官方 wheel 的 cp312 版本决定 |
 | Conda env | 仓库根目录 `.venv` | 前缀环境：`conda create -p ".\.venv"`，见 **§2.1** |
-| CARLA | 0.9.16 | `CarlaUE4.exe` 在外部启动，默认 `127.0.0.1:2000` |
+| CARLA | 0.9.16 | `https://github.com/carla-simulator/carla` 下载realse 包 , 本项目依赖其中 agent 包 以及 carla whl |
 | 默认地图 | `Town10HD_Opt` | 启动时自动 load |
-| 前端 | `D:/urban_frontend` | vite dev，需先 `npm install` |
+| 前端 | `https://github.com/ChaoqianO/urban_frontend` | vite dev，需先 `npm install` |
 
 依赖列在 `pyproject.toml` 里：`aiohttp / python-socketio / aiortc / av / numpy / pydantic-settings / psutil / shapely / networkx` 等。`carla` **不在 PyPI**，必须从 CARLA 安装目录自带的 **cp312 Windows wheel** 安装（见 **§2.1**）。
 
@@ -41,20 +41,11 @@
 conda create -p ".\.venv" python=3.12 -y
 conda activate ".\.venv"
 pip install -e .[dev]
+#解压carla realse包,从中安装carla wheel
+#**`pip install …whl`**：示例路径改成你本机的 CARLA 目录；wheel 在 `PythonAPI\carla\dist\`，文件名须为 **`cp312` + `win_amd64`**，与上文 Python 3.12 一致。
 pip install "E:\Program Files\CARLA_0.9.16\PythonAPI\carla\dist\carla-0.9.16-cp312-cp312-win_amd64.whl"
 ```
 
-说明：
-
-- **_wheel 路径**：请按本机 CARLA 安装位置修改（一般在 `PythonAPI\carla\dist\` 下，文件名需与 Python 3.12 / win_amd64 一致）。
-- **路径含空格**：若仓库或 CARLA 在 `Program Files` 等目录下，conda 可能提示路径含空格；安装后务必 **`conda activate` 再运行**，减少脚本/工具解析路径的问题。
-- **CARLA `agents`（BasicAgent 等）**：`carlabridge` 会把 `CARLA_AGENTS_ROOT`（若未设置则默认 `D:/carla/PythonAPI/carla`）加入 `sys.path`。若 CARLA 不在默认盘符路径，请在启动前设置，例如：
-
-  ```powershell
-  $env:CARLA_AGENTS_ROOT = "E:\Program Files\CARLA_0.9.16\PythonAPI\carla"
-  ```
-
-- **`run.ps1`**：若脚本里 `$PythonExe` 仍指向旧的固定路径，请改为本仓库下的 `.\.venv\python.exe`（或 `(Join-Path $RepoRoot '.venv\python.exe')`），与上述环境一致。
 
 ## 3. 启动流程（演示路径）
 
@@ -73,8 +64,16 @@ pip install "E:\Program Files\CARLA_0.9.16\PythonAPI\carla\dist\carla-0.9.16-cp3
 
 ### 3.2 Bridge
 
+配置脚本环境
+修改 **`run.ps1` 里的 `$PythonExe`**：应指向本节所用的前缀环境解释器（通常 **`.\.venv\python.exe`**，若仍为其他机器留下的绝对路径，请改掉。
+修改 **`run.ps1` 里的$env:CARLA_AGENTS_ROOT**  请改成你的carla包中的 **`…\PythonAPI\carla`**（需与解压后的 CARLA 安装布局一致），或在每次启动前用会话变量覆盖：例如：
+   ```powershell
+   $env:CARLA_AGENTS_ROOT = "E:\Program Files\CARLA_0.9.16\PythonAPI\carla"
+   ```
+
+
 ```powershell
-cd "E:\Program Files\CarlaBridge"   # 换成你的仓库路径
+cd CarlaBridge   # 换成你的仓库路径
 conda activate ".\.venv"            # 若 run.ps1 已指向 .\.venv\python.exe 可省略
 .\run.ps1 -Scenario s1_fire
 ```
