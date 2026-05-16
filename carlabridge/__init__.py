@@ -1,22 +1,23 @@
 """CarlaBridge — realtime middleware between CARLA and frontend / urban agent.
 
-This package's import side-effect adds CARLA's bundled `agents` module to
-sys.path so that `from agents.navigation.basic_agent import BasicAgent` works.
+Import side-effect: prepends `carlabridge/vendor/` to `sys.path` so that
+CARLA's bundled `agents` subpackage (vendored under
+`carlabridge/vendor/agents/`) resolves via its original absolute imports
+(`from agents.navigation.global_route_planner import GlobalRoutePlanner`).
 
-The path can be overridden by the `CARLA_AGENTS_ROOT` environment variable.
-Default: `D:/carla/PythonAPI/carla`.
+The vendored copy is shipped with this repo — no external `CARLA_AGENTS_ROOT`
+or `sys.path` manipulation against a CARLA install directory is needed.
+See `carlabridge/vendor/README.md` for upgrade instructions.
 """
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
 __version__ = "0.1.0"
 
-_DEFAULT_AGENTS_ROOT = Path("D:/carla/PythonAPI/carla")
-_AGENTS_ROOT = Path(os.environ.get("CARLA_AGENTS_ROOT", _DEFAULT_AGENTS_ROOT))
-
-if _AGENTS_ROOT.is_dir() and str(_AGENTS_ROOT) not in sys.path:
-    sys.path.insert(0, str(_AGENTS_ROOT))
+_VENDOR_ROOT = Path(__file__).resolve().parent / "vendor"
+_VENDOR_STR = str(_VENDOR_ROOT)
+if _VENDOR_ROOT.is_dir() and _VENDOR_STR not in sys.path:
+    sys.path.insert(0, _VENDOR_STR)

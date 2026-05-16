@@ -27,7 +27,7 @@
 | OS | Windows 10 | (Linux 未验证；Win 多媒体定时器 + CARLA Python API 兼容) |
 | Python | 3.12 | 锁定，由 CARLA 官方 wheel 的 cp312 版本决定 |
 | Conda env | 仓库根目录 `.venv` | 前缀环境：`conda create -p ".\.venv"`，见 **§2.1** |
-| CARLA | 0.9.16 | `https://github.com/carla-simulator/carla` 下载realse 包 , 本项目依赖其中 agent 包 以及 carla whl |
+| CARLA | 0.9.16 | `https://github.com/carla-simulator/carla` 下载 release 包，从中安装 carla wheel；`agents` 子包已 vendored 进 `carlabridge/vendor/agents/`，无需单独配置 |
 | 默认地图 | `Town10HD_Opt` | 启动时自动 load |
 | 前端 | `https://github.com/ChaoqianO/urban_frontend` | vite dev，需先 `npm install` |
 
@@ -66,15 +66,11 @@ pip install "E:\Program Files\CARLA_0.9.16\PythonAPI\carla\dist\carla-0.9.16-cp3
 
 #### 配置脚本环境
 
-1. 修改 **`run.ps1` 里的 `$PythonExe`**：应指向本节所用的前缀环境解释器（通常 **`.\.venv\python.exe`**，若仍为其他机器留下的绝对路径，请改掉。
+1. 修改 **`run.ps1` 里的 `$PythonExe`**：应指向本节所用的前缀环境解释器（通常 **`.\.venv\python.exe`**，若仍为其他机器留下的绝对路径，请改掉）。
 
-2. 修改 **`run.ps1` 里的$env:CARLA_AGENTS_ROOT**  请改成你的carla包中的 **`…\PythonAPI\carla`**（需与解压后的 CARLA 安装布局一致），或在每次启动前用会话变量覆盖：例如：
+   > CARLA 的 `agents` 子包（`GlobalRoutePlanner` 等）已 vendored 进 `carlabridge/vendor/agents/`，由 `carlabridge/__init__.py` 自动加入 `sys.path`，**不再需要** `CARLA_AGENTS_ROOT` 环境变量或外部路径配置。升级 CARLA 时按 `carlabridge/vendor/README.md` 替换该目录即可。
 
-   ```powershell
-   $env:CARLA_AGENTS_ROOT = "E:\Program Files\CARLA_0.9.16\PythonAPI\carla"
-   ```
-
-3. 启动
+2. 启动
 ```powershell
 cd CarlaBridge   # 换成你的仓库路径
 conda activate ".\.venv"            # 若 run.ps1 已指向 .\.venv\python.exe 可省略

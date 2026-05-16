@@ -3,9 +3,11 @@
     Launch CarlaBridge using the bundled conda env at D:/carla/env.
 
 .DESCRIPTION
-    Uses the absolute python at D:/carla/env/python.exe so no `conda activate`
-    is required. PYTHONPATH is set to the repo root so `carlabridge` resolves
-    + sys.path side-effect adds CARLA's bundled agents (see carlabridge/__init__.py).
+    Uses the absolute python at .\.venv\python.exe so no `conda activate`
+    is required. PYTHONPATH is set to the repo root so `carlabridge` resolves;
+    CARLA's `agents` subpackage is vendored under `carlabridge/vendor/agents/`
+    and added to sys.path by `carlabridge/__init__.py` — no external CARLA
+    PythonAPI path is required at runtime.
 
     Note: PowerShell parameter style — use SINGLE dash (`-Scenario`, NOT
     `--scenario`). The script translates to the python `--`-style CLI
@@ -41,10 +43,6 @@ param(
 $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $PythonExe = "./.venv/python.exe"
-# $PythonExe = "D:\carla\env\python.exe"
-if (-not $env:CARLA_AGENTS_ROOT) {
-    $env:CARLA_AGENTS_ROOT = "E:\Program Files\CARLA_0.9.16\PythonAPI\carla"
-}
 
 if (-not (Test-Path $PythonExe)) {
     Write-Error @"
