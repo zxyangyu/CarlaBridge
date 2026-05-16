@@ -135,7 +135,7 @@ carlabridge/
 | `scripts/restart_smoke.ps1` | NF7 + AC-8 5 次启停验证 |
 | `scripts/nf5_memory_probe.ps1` | NF5 30 分钟内存增长验证 |
 | `config/default.toml` | 默认配置（dev-tune：state_hz=1 / fixed_delta_seconds=0.05） |
-| `run.ps1` | Windows 启动脚本（参数透传 + TIME_WAIT 预警） |
+| `run.py` | 跨平台启动脚本（参数透传 + 启动前 POST `/admin/shutdown` 释放端口 + TIME_WAIT 预警） |
 
 ---
 

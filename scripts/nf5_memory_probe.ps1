@@ -40,7 +40,7 @@ $csv = Join-Path $LogDir "nf5_memory_$stamp.csv"
 # Locate the bridge process.
 $bridgePid = (Get-NetTCPConnection -LocalPort 5000 -State Listen -ErrorAction SilentlyContinue).OwningProcess | Select-Object -First 1
 if (-not $bridgePid) {
-    Write-Error "no bridge listening on 5000. Start with .\run.ps1 first."
+    Write-Error "no bridge listening on 5000. Start with `python run.py` first."
     exit 2
 }
 Write-Host "==> probing bridge pid=$bridgePid for $DurationMinutes min @ $SampleIntervalSec s interval" -ForegroundColor Cyan

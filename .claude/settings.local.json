@@ -25,7 +25,7 @@
       "Bash(echo \"exit=$?\")",
       "Bash(curl -s -m 2 -X POST http://127.0.0.1:5000/admin/shutdown)",
       "Bash(echo \"port_check_exit=$?\")",
-      "Bash(timeout 75 powershell.exe -ExecutionPolicy Bypass -File ./run.ps1 --scenario s1_fire --log-level INFO)",
+      "Bash(timeout 75 ./.venv/python.exe run.py --scenario s1_fire --log-level INFO)",
       "Bash(curl -s -m 3 http://127.0.0.1:5000/healthz)",
       "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'tick_fps={d[\\\\\"tick_fps\\\\\"]} sim_time={d[\\\\\"snapshot\\\\\"][\\\\\"sim_time\\\\\"]:.2f}  cmd_depth={d[\\\\\"command_bus\\\\\"][\\\\\"depth\\\\\"]}'\\); print\\('cameras:', {k:v['produced'] for k,v in d['cameras'].items\\(\\)}\\)\")",
       "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f'tick_fps={d[\\\\\"tick_fps\\\\\"]} sim_time={d[\\\\\"snapshot\\\\\"][\\\\\"sim_time\\\\\"]:.2f} cmd_depth={d[\\\\\"command_bus\\\\\"][\\\\\"depth\\\\\"]} scenario={d[\\\\\"scenario\\\\\"]} clients={d[\\\\\"clients\\\\\"]}'\\)\")",
@@ -62,7 +62,20 @@
       "PowerShell(Get-Command *)",
       "PowerShell(winget install *)",
       "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"User\"\\); & \"C:\\\\Program Files\\\\GitHub CLI\\\\gh.exe\" --version)",
-      "Bash(grep *)"
+      "Bash(grep *)",
+      "Read(//e/Program Files/CARLA_0.9.16/PythonAPI/carla/agents/**)",
+      "Bash(cmd /c dir \"E:\\\\Program Files\\\\CARLA_0.9.16\\\\PythonAPI\\\\carla\\\\agents\" /b /s)",
+      "Bash(cp \"E:/Program Files/CARLA_0.9.16/PythonAPI/carla/agents/__init__.py\" carlabridge/vendor/agents/)",
+      "Bash(cp \"E:/Program Files/CARLA_0.9.16/PythonAPI/carla/agents/requirements.txt\" carlabridge/vendor/agents/)",
+      "Bash(cp \"E:/Program Files/CARLA_0.9.16/PythonAPI/carla/agents/navigation/\"*.py carlabridge/vendor/agents/navigation/)",
+      "Bash(cp \"E:/Program Files/CARLA_0.9.16/PythonAPI/carla/agents/tools/\"*.py carlabridge/vendor/agents/tools/)",
+      "PowerShell($env:PYTHONPATH = \\(Get-Location\\).Path; .\\\\.venv\\\\python.exe -c \"import carlabridge; from agents.navigation.global_route_planner import GlobalRoutePlanner; print\\('GRP import OK:', GlobalRoutePlanner.__module__\\)\")",
+      "PowerShell($env:PYTHONPATH = \\(Get-Location\\).Path; .\\\\.venv\\\\python.exe -m pytest tests/ -q 2>&1 | Select-Object -Last 30)",
+      "Bash(.\\\\.venv\\\\python.exe *)",
+      "PowerShell(.\\\\.venv\\\\python.exe run.py --help)",
+      "Bash(./.venv/python.exe -c \"import ast; ast.parse\\(open\\('run.py', encoding='utf-8'\\).read\\(\\)\\); print\\('parse ok'\\)\")",
+      "Bash(./.venv/python.exe run.py --help)",
+      "Bash(./.venv/python.exe *)"
     ]
   }
 }
