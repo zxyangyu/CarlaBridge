@@ -64,14 +64,17 @@ pip install "E:\Program Files\CARLA_0.9.16\PythonAPI\carla\dist\carla-0.9.16-cp3
 
 ### 3.2 Bridge
 
-配置脚本环境
-修改 **`run.ps1` 里的 `$PythonExe`**：应指向本节所用的前缀环境解释器（通常 **`.\.venv\python.exe`**，若仍为其他机器留下的绝对路径，请改掉。
-修改 **`run.ps1` 里的$env:CARLA_AGENTS_ROOT**  请改成你的carla包中的 **`…\PythonAPI\carla`**（需与解压后的 CARLA 安装布局一致），或在每次启动前用会话变量覆盖：例如：
+#### 配置脚本环境
+
+1. 修改 **`run.ps1` 里的 `$PythonExe`**：应指向本节所用的前缀环境解释器（通常 **`.\.venv\python.exe`**，若仍为其他机器留下的绝对路径，请改掉。
+
+2. 修改 **`run.ps1` 里的$env:CARLA_AGENTS_ROOT**  请改成你的carla包中的 **`…\PythonAPI\carla`**（需与解压后的 CARLA 安装布局一致），或在每次启动前用会话变量覆盖：例如：
+
    ```powershell
    $env:CARLA_AGENTS_ROOT = "E:\Program Files\CARLA_0.9.16\PythonAPI\carla"
    ```
 
-
+3. 启动
 ```powershell
 cd CarlaBridge   # 换成你的仓库路径
 conda activate ".\.venv"            # 若 run.ps1 已指向 .\.venv\python.exe 可省略
