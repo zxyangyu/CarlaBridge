@@ -1,4 +1,23 @@
-# CarlaBridge 开发任务（tasks.md）
+> ⚠️ **ARCHIVED — M0~M8 全部完成（截至 2026-05-15），保留作为开发历史 changelog**
+>
+> 本文是 CarlaBridge 初版（v0.1）开发任务清单，按里程碑 M0~M8 拆分。所有里程碑已 ✅ 完成。
+> 之后的重构任务清单见同目录 `tasks-refactor-r1-r11.md`（同样已完成）。
+>
+> 当前权威文档：
+> - `../../README.md` — 入门、运维、AC/NF 真机验收状态
+> - `../../design.md` — 当前架构
+> - `../../bridge-agent-protocol-v1.md` — 协议契约
+>
+> 本文中以下内容已被推翻（不要据此再设计/实现）：
+> - M6 任务 (`T-M6-06` ~ `T-M6-12`) 中关于 `AgentLink` / `MockAgentLink` / `SocketIOAgentLink` / `mock_agent_loop` / `SCRIPT` 的实现细节 — 已被 refactor v0.3 全部删除；当前 Bridge 内**没有** `carlabridge/agent/` 目录
+> - 所有指 `D:\CarlaBridge` 的路径 — 实际仓库在 `E:\Urban_v2\CarlaBridge`
+> - 所有指 conda env `D:/carla/env` 的路径 — 实际 env 在仓 root 的 `.\.venv`
+>
+> 仍可参考：M0~M5 / M7 / M8 的任务拆分形态、AC/NF 验收标准、X 横向任务约定。
+
+---
+
+# CarlaBridge 开发任务（tasks.md） — M0~M8 历史 changelog
 
 > 文档目的：把 `design.md` 拆成可执行、可验收、可排期的任务清单。
 > 上游：`spec.md` v0.1 + `design.md` v0.1。

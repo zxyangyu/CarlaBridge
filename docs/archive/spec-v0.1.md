@@ -1,4 +1,21 @@
-# CarlaBridge 需求规范 (spec.md)
+> ⚠️ **ARCHIVED — 仅供历史追溯**
+>
+> 本文是 CarlaBridge v0.1 的初版需求规范，已被后续重构推翻（参见 §12 D10）。
+> 当前权威文档：
+> - `../../README.md` — 安装、启动、HTTP/WS 端点、故障排查
+> - `../../design.md` — 当前架构（精简版）
+> - `../../bridge-agent-protocol-v1.md` — Bridge ⇄ Agent 线协议 v1.0（权威契约）
+>
+> 本文中以下章节与现状不一致，**不要再据此实现**：
+> - F4 (Agent 接口)、§7.2 (Socket.IO `agent_ack` / `agent_reject` 事件)、§8 (前端字段) 中关于 mock Agent 嵌在 scenario / `agent_command` 透传 / `agent_ack`+`agent_reject` 双向事件的描述 — 已被 D10 + protocol v1.0 整体替换为 sio.call return-value + `command_status` 事件模型
+> - D2 (mock 写死剧本) — 已废弃；Bridge 不再含任何剧本/定时器
+> - F6.3 / §7.2 中"内部指令枚举 6 条 (`UAV_RTL` / `UGV_DISPATCH` / `MARK_EVENT` / `ATTACH_ACTOR` …)" — 已重新定义为 8 条命令（详见 protocol §6）
+>
+> 仍有效的部分：§1 (业务目标)、§2 (范围划界)、§4.1 (S1 演示流程的高层叙事)、§13 (术语)、§12 D1/D3/D5/D6/D7/D9/D10 决议。
+
+---
+
+# CarlaBridge 需求规范 (spec.md) — v0.1 历史版
 
 > 文档目的：定义 **WHAT / WHY**，不涉及代码与实现细节。
 > 配套文档：`design.md`（架构与技术选型）、`tasks.md`（开发拆分）将在本规范确认后生成。

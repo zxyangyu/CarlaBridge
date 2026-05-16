@@ -1,4 +1,20 @@
-# CarlaBridge 重构任务（tasks-refactor.md）
+> ⚠️ **ARCHIVED — R1~R11 全部完成（截至 2026-05-16），保留作为重构 changelog**
+>
+> 本文是 refactor v0.3 + R11 envelope 增量的任务清单 + DoD。所有 R 任务已 ✅ 完成；当前代码状态即各 DoD 描述的最终态。
+>
+> 当前权威文档：
+> - `../../README.md` — 入门、运维、AC/NF 真机验收状态
+> - `../../design.md` — 当前架构
+> - `../../bridge-agent-protocol-v1.md` — 协议契约
+>
+> 本文档保留价值：
+> - **R 任务的 DoD** 是当前测试用例的来源（`tests/test_*.py` 与 R# 一一对应）
+> - **§11.5 R11 一致性不变量**仍是协议合规性的 acceptance criteria
+> - **§14 风险提醒** 的三条都在落地中真实碰到过
+
+---
+
+# CarlaBridge 重构任务（tasks-refactor.md） — R1~R11 历史 changelog
 
 > 文档目的：把 `design-refactor-agent-boundary.md` v0.3 拆成可执行、可验收、可排期的任务清单。
 > 上游：`design-refactor-agent-boundary.md` v0.3（已评审 §15 通过）。

@@ -1,4 +1,22 @@
-# CarlaBridge × UrbanAgent 重构设计（Agent / Bridge 解耦）
+> ⚠️ **ARCHIVED — refactor v0.3 + R11 已 100% 落地，保留作为重构决议记录**
+>
+> 本文是 2026-05-15 评审通过的 Bridge / Agent 边界重构设计。R1~R11 全部完成（详见同目录 `tasks-refactor-r1-r11.md`），代码现状即本文设计。
+>
+> 当前权威文档：
+> - `../../bridge-agent-protocol-v1.md` — 线协议契约（最高优先级）
+> - `../../design.md` — 当前架构（精简版，与本文 §6 / §7 等价但简化）
+> - `../../README.md` — 入门、运维
+>
+> 本文档保留价值：
+> - **决议出处** — §1 七条目标、§2 角色边界硬约束的决策依据
+> - **§7 Bridge 模块改造细则** — 详细列出哪些文件被改/删/新增，便于追溯
+> - **§9 数据流示例** — 启动 → 待命 → 火情 → reset 的端到端走查
+> - **§10 风险表** — 落地中确实碰到的边界问题
+> - **§11 删除清单** — 验证仓库清理完整性的 grep 列表
+
+---
+
+# CarlaBridge × UrbanAgent 重构设计（Agent / Bridge 解耦） — 决议记录
 
 > 文档目的：定义 **WHAT changes & HOW** —— 把 Bridge 内的剧本/策略迁出，固化 Bridge ⇄ Agent 的协议。
 > 本文档**仅覆盖 CarlaBridge 仓内**的改动；UrbanAgent 改造由对方仓自行规划（本文档 §8 仅作协议参考）。

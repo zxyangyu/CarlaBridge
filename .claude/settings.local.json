@@ -58,7 +58,11 @@
       "Bash(dir D:Urban_v2CarlaBridge *)",
       "Bash(echo \"main pid: $!\")",
       "Bash(curl -s -X POST http://127.0.0.1:5000/admin/shutdown -o /dev/null)",
-      "Bash(powershell *)"
+      "Bash(powershell *)",
+      "PowerShell(Get-Command *)",
+      "PowerShell(winget install *)",
+      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"User\"\\); & \"C:\\\\Program Files\\\\GitHub CLI\\\\gh.exe\" --version)",
+      "Bash(grep *)"
     ]
   }
 }
