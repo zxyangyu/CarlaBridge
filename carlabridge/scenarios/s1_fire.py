@@ -54,7 +54,7 @@ UAV_SPREAD = 20.0            # horizontal spread between UAVs
 
 # Refactor v0.3 — config-pinned thresholds (design §7.7)
 UAV_ARRIVAL_EPS_M = 0.5            # UAV GOTO/RTL/PATROL waypoint reach radius
-EXTINGUISH_RADIUS_M = 5.0          # UGV must be within this of an incident
+EXTINGUISH_RADIUS_M = 8.0          # UGV must be within this of an incident
 # Sim seconds after accept before fire actor is destroyed and command completes.
 EXTINGUISH_DWELL_S = 3.0
 DEFAULT_UAV_RTL_SPEED = 8.0        # m/s when params.cruise_speed missing
