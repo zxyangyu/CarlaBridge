@@ -176,6 +176,12 @@ class AgentNamespace(socketio.AsyncNamespace):
             )
             return _rejected(cmd.id, "overloaded")
 
+        self._event_log.add(
+            "info", "AGENT",
+            f"accept {cmd.id} kind={cmd.kind.value} target={cmd.target}",
+            cmd_id=cmd.id,
+        )
+
         return {
             "status": "accepted",
             "cmd_id": cmd.id,
