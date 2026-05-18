@@ -25,13 +25,13 @@
 | 项 | 值 | 备注 |
 |---|---|---|
 | OS | Windows 10 | (Linux 未验证；Win 多媒体定时器 + CARLA Python API 兼容) |
-| Python | 3.12 | 锁定，由 CARLA 官方 wheel 的 cp312 版本决定 |
-| Conda env | 仓库根目录 `.venv` | 前缀环境：`conda create -p ".\.venv"`，见 **§2.1** |
-| CARLA | 0.9.16 | `https://github.com/carla-simulator/carla` 下载 release 包，从中安装 carla wheel；`agents` 子包已 vendored 进 `carlabridge/vendor/agents/`，无需单独配置 |
+| Python | 3.12 | 与 PyPI `carla==0.9.16` 提供的轮子匹配（本项目 `requires-python` 锁定 3.12） |
+| Conda env | 仓库根目录 `.venv` | 前缀环境：`conda create -p ".\.venv"`，激活后 **`pip install -e .`** 会一并装上 PyPI 的 `carla`，见 **§2.1** |
+| CARLA（仿真服务端） | 0.9.16 | 从 `https://github.com/carla-simulator/carla` 下载对应 release 运行 `CarlaUE4.exe`；Python 客户端由 **`pyproject.toml` → `carla==0.9.16`**（PyPI）安装，须与服务端版本一致；`agents` 子包仍 vendored 在 `carlabridge/vendor/agents/` |
 | 默认地图 | `Town10HD_Opt` | 启动时自动 load |
 | 前端 | `https://github.com/ChaoqianO/urban_frontend` | vite dev，需先 `npm install` |
 
-依赖列在 `pyproject.toml` 里：`aiohttp / python-socketio / aiortc / av / numpy / pydantic-settings / psutil / shapely / networkx` 等。`carla` **不在 PyPI**，必须从 CARLA 安装目录自带的 **cp312 Windows wheel** 安装（见 **§2.1**）。
+依赖列在 `pyproject.toml` 里，含 **`carla==0.9.16`（PyPI）** 以及 `aiohttp / python-socketio / aiortc / av / numpy / pydantic-settings / psutil / shapely / networkx` 等。执行 **§2.1** 的 `pip install -e .` 或 `pip install -e ".[dev]"` 时会自动解析平台对应的官方预编译轮子（Windows 一般为 `cp312` + `win_amd64`）。
 
 ### 2.1 Conda 环境与依赖安装
 
@@ -40,12 +40,16 @@
 ```powershell
 conda create -p ".\.venv" python=3.12 -y
 conda activate ".\.venv"
-pip install -e .[dev]
-#解压carla realse包,从中安装carla wheel
-#**`pip install …whl`**：示例路径改成你本机的 CARLA 目录；wheel 在 `PythonAPI\carla\dist\`，文件名须为 **`cp312` + `win_amd64`**，与上文 Python 3.12 一致。
-pip install "E:\Program Files\CARLA_0.9.16\PythonAPI\carla\dist\carla-0.9.16-cp312-cp312-win_amd64.whl"
+python -m pip install -U pip
+# 可编辑安装本仓 + dev 依赖；会由 PyPI 拉取 carla==0.9.16（与本机 CARLA 0.9.16 服务端配套）
+pip install -e ".[dev]"
 ```
 
+**离线 / 无法用 PyPI 时**：可改用 CARLA 发行包自带的 wheel（路径示例  
+`"<CARLA_ROOT>\PythonAPI\carla\dist\carla-0.9.16-cp312-cp312-win_amd64.whl"`），在安装本仓前先 `pip install "…\*.whl"`，版本仍须 **`0.9.16`** 且与 Python **`3.12`**、平台 **`win_amd64`** 匹配。
+
+**镜像尚未同步 `carla==0.9.16` 时**：可临时改用官方索引，例如  
+`pip install -e ".[dev]" -i https://pypi.org/simple`（任选其一与时间窗口镜像策略即可）。
 
 ## 3. 启动流程（演示路径）
 
@@ -60,7 +64,7 @@ pip install "E:\Program Files\CARLA_0.9.16\PythonAPI\carla\dist\carla-0.9.16-cp3
 ```
 （建议 Low quality 以避免 CARLA 渲染线程拖慢 tick；详见故障 §6.1）
 
-或链接远程服务(校园网内) http://172.16.126.32:5000
+或链接远程服务(校园网内) http://172.16.126.32:2000
 
 ### 3.2 Bridge
 

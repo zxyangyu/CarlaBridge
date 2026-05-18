@@ -397,7 +397,7 @@ default = "s1_fire"
 | Socket.IO | python-socketio AsyncServer ≥ 5.x | 直接兼容前端 socket.io-client 4.x；sio.call return-value 形式 |
 | WebRTC | aiortc（VP8 软编） | spec D5：简单优先 |
 | 视频中转 | PyAV / numpy | aiortc 原生消费 av.VideoFrame |
-| CARLA | carla 0.9.16 Python API（cp312 wheel） | 项目锁定版本 |
+| CARLA | carla 0.9.16 Python API（`carla==0.9.16`，PyPI 预编译轮子） | 与服务端锁定同版本 |
 | UGV 导航 | `SimpleWaypointFollower`（工程内） | spec D9：BasicAgent 在 sync+camera 真机 30 s RPC timeout |
 | 配置 | pydantic-settings | TOML + env 自动合并 |
 | 日志 | stdlib logging | 不引入额外依赖 |

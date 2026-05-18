@@ -1,5 +1,7 @@
 # Vendored third-party code
 
+Python 模块 **`carla`**（与服务端 RPC 的客户端绑定）由仓库根 `pyproject.toml` 从 **PyPI `carla==0.9.16`** 安装，不放在本目录。
+
 ## `agents/`
 
 CARLA's `PythonAPI/carla/agents/` subpackage, copied verbatim from

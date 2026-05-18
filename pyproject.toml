@@ -12,6 +12,8 @@ readme = "README.md"
 license = { text = "Proprietary" }
 
 dependencies = [
+    # Python client for CARLA 0.9.16 (must match the simulator runtime). Wheels on PyPI.
+    "carla==0.9.16",
     "aiohttp>=3.9",
     "python-socketio>=5.10",
     "aiortc>=1.7",
@@ -61,10 +63,8 @@ include = ["carlabridge*"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
-# NOTE: The `carla` package is provided by CARLA's bundled wheel at
-#   <CARLA_ROOT>/PythonAPI/carla/dist/carla-0.9.16-cp312-cp312-win_amd64.whl
-# It must already be installed in the active conda env. We do not list it
-# as a dependency here because it's not on PyPI.
+# CARLA UE 仿真本体仍须单独安装（见 README）；本项目通过 PyPI `carla==0.9.16` 提供
+# Python 绑定。若离线环境无法用 PyPI，可改为 `pip install <CARLA_ROOT>/PythonAPI/carla/dist/*.whl`。
 #
 # CARLA's `agents` subpackage (GlobalRoutePlanner et al) is vendored under
 # carlabridge/vendor/agents/ and added to sys.path at runtime by
