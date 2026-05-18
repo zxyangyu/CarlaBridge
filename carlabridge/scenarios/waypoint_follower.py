@@ -37,6 +37,9 @@ DEFAULT_TARGET_SPEED_MPS = 25.0 / 3.6   # 25 km/h ≈ 6.94 m/s
 DEFAULT_REACH_RADIUS_M = 3.0            # consider waypoint "reached" within 3m
 DEFAULT_ARRIVAL_RADIUS_M = 4.0          # final-destination tolerance
 DEFAULT_SAMPLING_RES_M = 2.0            # GRP waypoint spacing
+DEFAULT_LOOKAHEAD_M = 6.0               # pure-pursuit aim distance; larger → smoother
+DEFAULT_HEADING_FULL_LOCK_DEG = 60.0    # heading error that maps to |steer|=1
+DEFAULT_STEER_SMOOTHING = 0.6           # α in EMA: steer = α·raw + (1−α)·prev
 
 
 class SimpleWaypointFollower:
@@ -49,15 +52,22 @@ class SimpleWaypointFollower:
         target_speed_mps: float = DEFAULT_TARGET_SPEED_MPS,
         reach_radius_m: float = DEFAULT_REACH_RADIUS_M,
         arrival_radius_m: float = DEFAULT_ARRIVAL_RADIUS_M,
+        lookahead_m: float = DEFAULT_LOOKAHEAD_M,
+        heading_full_lock_deg: float = DEFAULT_HEADING_FULL_LOCK_DEG,
+        steer_smoothing: float = DEFAULT_STEER_SMOOTHING,
     ) -> None:
         self._vehicle = vehicle
         self._target_speed = target_speed_mps
         self._reach_r = reach_radius_m
         self._arrival_r = arrival_radius_m
+        self._lookahead = lookahead_m
+        self._heading_full_lock = heading_full_lock_deg
+        self._steer_alpha = steer_smoothing
         self._waypoints: list = []        # list of (x, y, z) tuples
         self._idx = 0
         self._final_xyz: tuple[float, float, float] | None = None
         self._arrived = False
+        self._prev_steer = 0.0
 
     # ---- setup --------------------------------------------------------
 
@@ -124,13 +134,29 @@ class SimpleWaypointFollower:
                 self._arrived = True
                 return carla.VehicleControl(throttle=0.0, brake=1.0, steer=0.0)
 
-        tx, ty, _ = self._waypoints[self._idx]
+        # Pure-pursuit aim: walk forward from _idx until a waypoint is at least
+        # `_lookahead` away. Aiming at a distant waypoint keeps the heading
+        # error geometrically small under modest lateral offset, which is the
+        # main cause of single-tick steer flips at 30 Hz.
+        aim_idx = self._idx
+        while aim_idx < len(self._waypoints) - 1:
+            wx, wy, _ = self._waypoints[aim_idx]
+            if _xy_distance(loc.x, loc.y, wx, wy) < self._lookahead:
+                aim_idx += 1
+            else:
+                break
+
+        tx, ty, _ = self._waypoints[aim_idx]
         dx, dy = tx - loc.x, ty - loc.y
         desired_yaw = math.degrees(math.atan2(dy, dx))
         diff = _wrap180(desired_yaw - tf.rotation.yaw)
 
-        # P-controller on heading. ±45° error → full lock.
-        steer = max(-1.0, min(1.0, diff / 45.0))
+        # P-controller on heading + EMA low-pass. The EMA absorbs the per-tick
+        # sign flips that produce visible jitter; α controls how much new input
+        # bleeds through.
+        raw_steer = max(-1.0, min(1.0, diff / self._heading_full_lock))
+        steer = self._steer_alpha * raw_steer + (1.0 - self._steer_alpha) * self._prev_steer
+        self._prev_steer = steer
 
         # P-controller on speed.
         v = self._vehicle.get_velocity()

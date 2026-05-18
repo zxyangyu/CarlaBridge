@@ -17,7 +17,7 @@ port = 5000
 cors_origins = ["http://localhost:5173"]
 
 [broadcast]
-state_hz = 1
+state_hz = 10
 metrics_hz = 1
 
 [video]

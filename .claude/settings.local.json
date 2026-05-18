@@ -78,7 +78,10 @@
       "Bash(./.venv/python.exe *)",
       "Bash(.venv/Scripts/python.exe *)",
       "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/test_agent_command_rpc.py -q)",
-      "PowerShell(.\\\\.venv\\\\python.exe -m pytest tests/test_agent_command_rpc.py -q)"
+      "PowerShell(.\\\\.venv\\\\python.exe -m pytest tests/test_agent_command_rpc.py -q)",
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/test_waypoint_follower.py -q)",
+      "PowerShell(.\\\\.venv\\\\python.exe -m pytest tests/test_waypoint_follower.py -q)",
+      "PowerShell(.\\\\.venv\\\\python.exe -m pytest tests/ -q)"
     ]
   }
 }
