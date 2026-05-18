@@ -214,7 +214,9 @@ async def _async_main(sniffer: AgentSniffer) -> int:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="旁听 CarlaBridge /agent Socket.IO 消息（协议 v1）")
+    p = argparse.ArgumentParser(
+        description="旁听 CarlaBridge Socket.IO /agent 命名空间消息（Bridge × Agent 协议 v1）",
+    )
     p.add_argument("--url", default=DEFAULT_URL, help=f"Bridge 基址（默认 {DEFAULT_URL}）")
     p.add_argument("--agent-id", default="socket_sniffer", help="hello 中的 agent_id")
     p.add_argument("--connect-timeout", type=float, default=30.0)

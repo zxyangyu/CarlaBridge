@@ -111,7 +111,6 @@ async def test_broadcaster_metrics_payload_shape():
     sio = FakeSio()
     metrics = Metrics()
     metrics.set("tick_fps", 29.5)
-    metrics.set("cpu", 17)
     bc = Broadcaster(
         sio=sio,
         snapshot_ref=AtomicRef(_snap_with_one_each()),
@@ -125,5 +124,6 @@ async def test_broadcaster_metrics_payload_shape():
     await bc.stop()
     sm = sio.emits[("system_metrics", "/")][0]
     assert sm["fps"] == 29.5  # tick_fps surfaces as `fps`
-    assert sm["cpu"] == 17
-    assert "gpu" in sm and "mem" in sm and "net" in sm
+    for key in ("cpu", "gpu", "mem", "net"):
+        assert key in sm
+        assert 0.0 <= sm[key] <= 100.0

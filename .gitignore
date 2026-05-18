@@ -30,3 +30,4 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+trace.jsonl

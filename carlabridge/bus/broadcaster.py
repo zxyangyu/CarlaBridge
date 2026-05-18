@@ -20,6 +20,7 @@ from carlabridge.bus.projector import FocusBinding, for_agent, for_frontend
 from carlabridge.core.atomic import AtomicRef
 from carlabridge.core.snapshot import WorldSnapshot
 from carlabridge.obs.event_log import Event, EventLog
+from carlabridge.obs.host_sampler import HostSampler
 from carlabridge.obs.metrics import Metrics
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -49,6 +50,7 @@ class Broadcaster:
         self._event_log = event_log
         self._state_period = 1.0 / state_hz
         self._metrics_period = 1.0 / metrics_hz
+        self._host_sampler = HostSampler()
         self._task_state: asyncio.Task | None = None
         self._task_metrics: asyncio.Task | None = None
         self._unsubscribe_event_log: "callable | None" = None
@@ -174,12 +176,12 @@ class Broadcaster:
         while True:
             try:
                 await asyncio.sleep(period)
+                host = self._host_sampler.sample()
+                for key, value in host.items():
+                    self._metrics.set(key, value)
                 snap_metrics = self._metrics.snapshot()
                 payload = {
-                    "cpu": snap_metrics.get("cpu", 0),
-                    "gpu": snap_metrics.get("gpu", 0),
-                    "mem": snap_metrics.get("mem", 0),
-                    "net": snap_metrics.get("net", 0),
+                    **host,
                     "fps": snap_metrics.get("tick_fps", 0),
                 }
                 await self._sio.emit("system_metrics", payload, namespace="/")
