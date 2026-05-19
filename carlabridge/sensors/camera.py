@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
+from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING, Callable, Literal
 
@@ -118,6 +119,8 @@ def spawn_camera(
     spec: CameraSpec,
     queue: FrameQueue,
     attach_to: "carla.Actor | None" = None,
+    *,
+    record_dir: Path | None = None,
 ) -> SpawnedCamera:
     """Spawn a CARLA RGB camera and hook its listener to `queue`.
 
@@ -131,9 +134,13 @@ def spawn_camera(
     )
     actor = world.spawn_actor(bp, transform, attach_to=attach_to)
     width, height = spec.width, spec.height
+    if record_dir is not None:
+        record_dir.mkdir(parents=True, exist_ok=True)
 
     def _on_image(image: "carla.Image") -> None:
         try:
+            if record_dir is not None:
+                image.save_to_disk(str(record_dir / f"{image.frame:08d}"))
             arr = np.frombuffer(image.raw_data, dtype=np.uint8)
             arr = arr.reshape((height, width, 4))
             rgb = arr[:, :, :3][:, :, ::-1].copy()
@@ -251,8 +258,35 @@ class CameraManager:
     is the per-tick hook for follows_virtual cameras.
     """
 
-    def __init__(self, spawner: SpawnerFn = spawn_camera) -> None:
-        self._spawner = spawner
+    def __init__(
+        self,
+        spawner: SpawnerFn = spawn_camera,
+        *,
+        record_base: Path | str | None = None,
+    ) -> None:
+        record_path = Path(record_base) if record_base is not None else None
+        if record_path is not None:
+            record_path.mkdir(parents=True, exist_ok=True)
+
+            def _recording_spawner(
+                world: "carla.World",
+                spec: CameraSpec,
+                queue: FrameQueue,
+                attach_to: "carla.Actor | None" = None,
+            ) -> SpawnedCamera:
+                return spawner(
+                    world,
+                    spec,
+                    queue,
+                    attach_to,
+                    record_dir=record_path / spec.id,
+                )
+
+            self._spawner = _recording_spawner
+            log.info("camera PNG recording enabled under %s", record_path)
+        else:
+            self._spawner = spawner
+        self._record_base = record_path
         self._bindings: dict[str, CameraBinding] = {}
         self._cameras: dict[str, SpawnedCamera] = {}
         self._queues: dict[str, FrameQueue] = {}

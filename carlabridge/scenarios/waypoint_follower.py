@@ -37,9 +37,9 @@ DEFAULT_TARGET_SPEED_MPS = 25.0 / 3.6   # 25 km/h ≈ 6.94 m/s
 DEFAULT_REACH_RADIUS_M = 3.0            # consider waypoint "reached" within 3m
 DEFAULT_ARRIVAL_RADIUS_M = 4.0          # final-destination tolerance
 DEFAULT_SAMPLING_RES_M = 2.0            # GRP waypoint spacing
-DEFAULT_LOOKAHEAD_M = 6.0               # pure-pursuit aim distance; larger → smoother
+DEFAULT_LOOKAHEAD_M = 8.0               # pure-pursuit aim distance; larger → smoother
 DEFAULT_HEADING_FULL_LOCK_DEG = 60.0    # heading error that maps to |steer|=1
-DEFAULT_STEER_SMOOTHING = 0.6           # α in EMA: steer = α·raw + (1−α)·prev
+DEFAULT_STEER_SMOOTHING = 0.4           # α in EMA: steer = α·raw + (1−α)·prev
 
 
 class SimpleWaypointFollower:
@@ -162,7 +162,7 @@ class SimpleWaypointFollower:
         v = self._vehicle.get_velocity()
         speed = math.sqrt(v.x * v.x + v.y * v.y)  # ignore z (we're on roads)
         if speed < self._target_speed:
-            throttle = 0.6
+            throttle = 1
             brake = 0.0
         elif speed > self._target_speed * 1.2:
             throttle = 0.0

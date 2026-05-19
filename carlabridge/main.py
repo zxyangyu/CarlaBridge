@@ -62,6 +62,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--log-level", type=str, default=None, help="DEBUG/INFO/WARN/ERROR")
     p.add_argument("--no-carla", action="store_true",
                    help="skip CARLA connection (dev only — for HTTP-only smoke tests)")
+    p.add_argument(
+        "--record-dir",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="save each camera frame as PNG under DIR/<camera_id>/ (ffmpeg to MP4 after run)",
+    )
     return p.parse_args(argv)
 
 
@@ -83,12 +90,11 @@ def _seed_bindings(camera_manager: CameraManager) -> None:
         fov=90.0, width=1280, height=720, fps=25,
         attach_entity_id=None,  # scenario fills this in
     )))
-    # ground: attached_to_actor UGV — scenario must set attach_entity_id.
+    # ground: attached_to_actor UGV (s1_fire: vehicle.carlamotors.firetruck).
     camera_manager.bind(CameraBinding(spec=CameraSpec(
         id="ground", mode="attached_to_actor",
-        # Offset in actor-local frame: above + slightly behind.
-        x=-3.0, y=0.0, z=2.0,
-        pitch=-10.0, yaw=0.0, roll=0.0,
+        # Actor-local: behind cab + above roof (sedan was z=2; firetruck ~+1.8 m).
+        x=-4.5, y=0, z=6, pitch=-25, yaw=0.0, roll=0.0,
         fov=70.0, width=1280, height=720, fps=25,
         attach_entity_id=None,
     )))
@@ -102,7 +108,9 @@ def _apply_cli_overrides(settings: Settings, args: argparse.Namespace) -> Settin
     return settings
 
 
-async def _run(settings: Settings, *, no_carla: bool) -> int:
+async def _run(
+    settings: Settings, *, no_carla: bool, record_dir: Path | None = None
+) -> int:
     event_log = EventLog(capacity=settings.logging.event_log_buffer)
     metrics = Metrics()
     fleet = Fleet()
@@ -115,7 +123,9 @@ async def _run(settings: Settings, *, no_carla: bool) -> int:
     # the namespaces (on_connect emits depend on it).
     snapshot_ref: AtomicRef[WorldSnapshot] = AtomicRef()
     focus = FocusBinding()
-    camera_manager = CameraManager()
+    camera_manager = CameraManager(record_base=record_dir)
+    if record_dir is not None:
+        event_log.add("ok", "BRIDGE", f"recording PNGs under {record_dir}")
     # M4: pre-bind the three frontend channels (aerial / ground / city) so
     # the signaling route and on-connect snapshot find their FrameQueues
     # immediately. aerial / ground stay unspawned until a scenario (M5) sets
@@ -374,7 +384,9 @@ def cli(argv: list[str] | None = None) -> int:
     settings = _apply_cli_overrides(settings, args)
     _configure_logging(settings.logging.level)
     try:
-        return asyncio.run(_run(settings, no_carla=args.no_carla))
+        return asyncio.run(
+            _run(settings, no_carla=args.no_carla, record_dir=args.record_dir)
+        )
     except KeyboardInterrupt:
         return 130
 

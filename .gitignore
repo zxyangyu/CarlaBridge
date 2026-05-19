@@ -16,6 +16,7 @@ dist/
 # Logs / runtime
 logs/
 *.log
+recordings/
 
 # Secrets / local overrides
 .env

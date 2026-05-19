@@ -65,7 +65,7 @@ class _WorldFacade:
     carla_world: Any
 
 
-def _make_scen(blueprints=("vehicle.carlamotors.firetruck",), fail_spawn=False):
+def _make_scen(blueprints=("static.prop.barrel",), fail_spawn=False):
     fleet = Fleet()
     # Pre-populate UGV/UAV to mimic post-setup state; ignite_fire doesn't
     # need them but keeping the fleet realistic is harmless.
@@ -118,17 +118,17 @@ def test_ignite_fire_preserves_severity_and_kind():
 
 
 def test_ignite_fire_uses_explicit_blueprint_when_provided():
-    scen, _, carla = _make_scen(blueprints=("static.prop.kiosk_01",))
+    scen, _, carla = _make_scen(blueprints=("static.prop.warningaccident",))
     scen.ignite_fire(id="fire-001", position={"x": 1, "y": 2, "z": 0},
-                     blueprint="static.prop.kiosk_01")
-    assert carla.spawned[0].bp_id == "static.prop.kiosk_01"
+                     blueprint="static.prop.warningaccident")
+    assert carla.spawned[0].bp_id == "static.prop.warningaccident"
 
 
 def test_ignite_fire_falls_back_through_default_blueprints():
-    # First two default blueprints absent; third present.
-    scen, _, carla = _make_scen(blueprints=("static.prop.kiosk_01",))
+    # barrel absent; warningaccident present (second in FIRE_MARKER_BLUEPRINTS).
+    scen, _, carla = _make_scen(blueprints=("static.prop.warningaccident",))
     scen.ignite_fire(id="fire-001", position={"x": 0, "y": 0, "z": 0})
-    assert carla.spawned[0].bp_id == "static.prop.kiosk_01"
+    assert carla.spawned[0].bp_id == "static.prop.warningaccident"
 
 
 # ---- error cases ---------------------------------------------------------

@@ -100,7 +100,7 @@ def _aerial_spec(target: str | None = None) -> CameraSpec:
 def _ground_spec(target: str | None = None) -> CameraSpec:
     return CameraSpec(
         id="ground", mode="attached_to_actor",
-        x=-3, y=0, z=2, pitch=-10,
+        x=-4.5, y=0, z=8, pitch=-25,
         attach_entity_id=target,
     )
 

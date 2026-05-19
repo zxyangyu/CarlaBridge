@@ -177,6 +177,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="skip the graceful pre-flight shutdown of the existing bridge",
     )
+    p.add_argument(
+        "--record-dir",
+        metavar="DIR",
+        help="save camera PNGs under DIR/<camera_id>/ (see scripts/png_to_mp4.ps1)",
+    )
     return p.parse_args(argv)
 
 
@@ -206,6 +211,8 @@ def main(argv: list[str] | None = None) -> int:
         cmd += ["--log-level", args.log_level]
     if args.no_carla:
         cmd += ["--no-carla"]
+    if args.record_dir:
+        cmd += ["--record-dir", args.record_dir]
 
     env = os.environ.copy()
     env["PYTHONPATH"] = str(REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")

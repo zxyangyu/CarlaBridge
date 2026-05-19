@@ -38,9 +38,13 @@ log = logging.getLogger(__name__)
 
 
 UGV_BLUEPRINT_CANDIDATES = (
-    "vehicle.lincoln.mkz_2020",
+    "vehicle.carlamotors.firetruck",
     "vehicle.lincoln.mkz_2017",
     "vehicle.tesla.model3",
+)
+# If the firetruck cannot fit a spawn point, try another emergency vehicle only.
+UGV_BLUEPRINT_FALLBACKS = (
+    "vehicle.ford.ambulance",
 )
 
 FIRE_MARKER_BLUEPRINTS = (
@@ -94,10 +98,10 @@ class S1FireScenario(Scenario):
 
         bp_lib = carla_world.get_blueprint_library()
         preferred = list(_filter_existing(bp_lib, UGV_BLUEPRINT_CANDIDATES))
-        all_vehicles = list(bp_lib.filter("vehicle.*"))
+        fallbacks = list(_filter_existing(bp_lib, UGV_BLUEPRINT_FALLBACKS))
         seen_ids: set[str] = set()
         candidates = []
-        for bp in preferred + all_vehicles:
+        for bp in preferred + fallbacks:
             if bp.id in seen_ids:
                 continue
             seen_ids.add(bp.id)
