@@ -26,15 +26,38 @@ if (-not $outRoot) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Nul
 
 function Convert-OneCamera {
     param([string] $PngDir, [string] $Mp4Path)
-    $pattern = Join-Path $PngDir "*.png"
-    if (-not (Test-Path $pattern)) {
+    $pngs = @(Get-ChildItem -Path $PngDir -Filter "*.png" -File | Sort-Object Name)
+    if ($pngs.Count -eq 0) {
         Write-Warning "skip (no PNGs): $PngDir"
         return
     }
+
     Write-Host "==> $Mp4Path"
-    & ffmpeg -y -hide_banner -loglevel error `
-        -framerate $Fps -pattern_type glob -i (Join-Path $PngDir "*.png") `
-        -c:v libx264 -pix_fmt yuv420p $Mp4Path
+    $firstName = $pngs[0].BaseName
+    if ($firstName -match '^\d+$') {
+        # Numeric sequence (%08d.png + -start_number). Avoids glob, unsupported on many Windows ffmpeg builds.
+        $padWidth = $firstName.Length
+        $startNumber = [int]$firstName
+        $pattern = Join-Path $PngDir ("%0{0}d.png" -f $padWidth)
+        & ffmpeg -y -hide_banner -loglevel error `
+            -framerate $Fps -start_number $startNumber -i $pattern `
+            -c:v libx264 -pix_fmt yuv420p $Mp4Path
+    } else {
+        # Non-numeric names: concat demuxer (sorted file list).
+        $listFile = Join-Path ([System.IO.Path]::GetTempPath()) ("png_to_mp4_{0}.txt" -f [guid]::NewGuid().ToString('N'))
+        try {
+            $lines = $pngs | ForEach-Object {
+                $path = $_.FullName -replace '\\', '/' -replace "'", "''"
+                "file '$path'"
+            }
+            [System.IO.File]::WriteAllLines($listFile, $lines)
+            & ffmpeg -y -hide_banner -loglevel error `
+                -f concat -safe 0 -r $Fps -i $listFile `
+                -c:v libx264 -pix_fmt yuv420p $Mp4Path
+        } finally {
+            Remove-Item -LiteralPath $listFile -ErrorAction SilentlyContinue
+        }
+    }
     if ($LASTEXITCODE -ne 0) { throw "ffmpeg failed for $PngDir" }
 }
 
