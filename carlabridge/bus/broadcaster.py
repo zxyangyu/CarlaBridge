@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING
 
 from carlabridge.bus.envelope import wrap
@@ -146,7 +147,12 @@ class Broadcaster:
         """
         if self._loop is None:
             return
-        payload = {"severity": evt.severity, "source": evt.source, "message": evt.message}
+        payload = {
+            "timestamp": evt.ts,
+            "severity": evt.severity,
+            "source": evt.source,
+            "message": evt.message,
+        }
         try:
             self._loop.call_soon_threadsafe(
                 self._sio.start_background_task,
@@ -182,6 +188,7 @@ class Broadcaster:
                 snap_metrics = self._metrics.snapshot()
                 payload = {
                     **host,
+                    "timestamp": time.time(),
                     "fps": snap_metrics.get("tick_fps", 0),
                 }
                 await self._sio.emit("system_metrics", payload, namespace="/")

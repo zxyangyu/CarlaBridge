@@ -48,7 +48,12 @@ class FrontendNamespace(socketio.AsyncNamespace):
         for evt in self._event_log.recent(100):
             await self.emit(
                 "event_log",
-                {"severity": evt.severity, "source": evt.source, "message": evt.message},
+                {
+                    "timestamp": evt.ts,
+                    "severity": evt.severity,
+                    "source": evt.source,
+                    "message": evt.message,
+                },
                 to=sid,
             )
         # Emit an immediate snapshot if one is available.

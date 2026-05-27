@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import time
 from threading import RLock
 
 from carlabridge.core.snapshot import UavState, VehicleState, WorldSnapshot
@@ -122,9 +123,9 @@ def _city_payload(snap: WorldSnapshot) -> dict:
 
 
 def for_frontend(snap: WorldSnapshot, focus: FocusBinding) -> dict:
-    """Project to `state_update` payload `{uav?, ugv?, city?}` (partial)."""
+    """Project to `state_update` payload `{timestamp, uav?, ugv?, city?}`."""
     uav_id, ugv_id = focus.snapshot()
-    out: dict = {"city": _city_payload(snap)}
+    out: dict = {"timestamp": time.time(), "city": _city_payload(snap)}
     uav = _find_uav(snap, uav_id)
     if uav is not None:
         out["uav"] = _uav_payload(uav)

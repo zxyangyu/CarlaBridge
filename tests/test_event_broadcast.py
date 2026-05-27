@@ -88,7 +88,11 @@ async def test_broadcaster_fans_event_log_to_both_namespaces():
         fe = sio.emits[("event_log", "/")]
         ag = sio.emits[("event_log", "/agent")]
         # Frontend namespace stays bare (out of protocol scope, §1.2).
-        assert any(p.get("message") == "fire detected" for p in fe)
+        assert any(
+            p.get("message") == "fire detected"
+            and isinstance(p.get("timestamp"), float)
+            for p in fe
+        )
         # Agent namespace is envelope-wrapped per protocol §3.1.
         assert any(
             isinstance(p, dict)

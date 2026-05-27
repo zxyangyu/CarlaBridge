@@ -74,6 +74,7 @@ def test_for_frontend_default_focus_picks_first():
     snap = _make_snap()
     focus = FocusBinding()
     payload = for_frontend(snap, focus)
+    assert isinstance(payload["timestamp"], float)
     assert payload["uav"]["id"] == "UAV-01"
     assert payload["uav"]["altitude"] == 80
     assert payload["uav"]["battery"] == 92.0
@@ -102,6 +103,7 @@ def test_for_frontend_omits_missing_focus():
     """If snapshot has no UAV/UGV, those keys are absent (partial merge on frontend)."""
     snap = WorldSnapshot(sim_time=0)
     payload = for_frontend(snap, FocusBinding())
+    assert isinstance(payload["timestamp"], float)
     assert "uav" not in payload
     assert "ugv" not in payload
     assert payload["city"]["vehicles"] == 0

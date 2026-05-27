@@ -57,22 +57,24 @@ async def test_broadcaster_emits_state_periodically():
         snapshot_ref=ref,
         focus=FocusBinding(),
         metrics=Metrics(),
-        state_hz=50.0,  # crank up so we see emits inside 250ms
-        metrics_hz=10.0,
+        state_hz=50.0,  # crank up so we see several emits inside the window
+        metrics_hz=2.0,
     )
     bc.start()
-    await asyncio.sleep(0.25)
+    await asyncio.sleep(0.65)
     await bc.stop()
 
     fe_emits = sio.emits[("state_update", "/")]
     ag_emits = sio.emits[("state_snapshot", "/agent")]
     sm_emits = sio.emits[("system_metrics", "/")]
-    # 50 Hz * 0.25s ~= 12, allow loose bounds (CI jitter)
+    # 50 Hz * 0.65s ~= 32, allow loose bounds for Windows scheduling and
+    # host-metrics sampling.
     assert len(fe_emits) >= 5
     assert len(ag_emits) >= 5
     assert len(sm_emits) >= 1
 
     fe_payload = fe_emits[0]
+    assert isinstance(fe_payload["timestamp"], float)
     assert "city" in fe_payload
     assert fe_payload["uav"]["id"] == "UAV-01"
     assert fe_payload["ugv"]["id"] == "UGV-01"
@@ -123,6 +125,7 @@ async def test_broadcaster_metrics_payload_shape():
     await asyncio.sleep(0.1)
     await bc.stop()
     sm = sio.emits[("system_metrics", "/")][0]
+    assert isinstance(sm["timestamp"], float)
     assert sm["fps"] == 29.5  # tick_fps surfaces as `fps`
     for key in ("cpu", "gpu", "mem", "net"):
         assert key in sm
