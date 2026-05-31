@@ -72,14 +72,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def _seed_bindings(camera_manager: CameraManager) -> None:
+def _seed_bindings(camera_manager: CameraManager, settings: Settings) -> None:
     """M4 default channel layout. Scenarios (M5) override aerial/ground."""
+    video = settings.video
+    city_w, city_h = video.channel_resolution("city")
+    aerial_w, aerial_h = video.channel_resolution("aerial")
+    ground_w, ground_h = video.channel_resolution("ground")
     # city: world_pose high overhead, Town10HD-friendly z=200, pitch -90°
     camera_manager.bind(CameraBinding(spec=CameraSpec(
         id="city", mode="world_pose",
         x=0.0, y=40.0, z=200.0,
         pitch=-90.0, yaw=0.0, roll=0.0,
-        fov=90.0, width=1280, height=720, fps=25,
+        fov=90.0,
+        width=city_w, height=city_h, fps=video.channel_fps("city"),
     )))
     # aerial: follows_virtual UAV — scenario must set attach_entity_id at setup.
     camera_manager.bind(CameraBinding(spec=CameraSpec(
@@ -87,7 +92,8 @@ def _seed_bindings(camera_manager: CameraManager) -> None:
         # Offset relative to UAV's world pose (M4 uses world-frame offset).
         x=0.0, y=0.0, z=10.0,
         pitch=-50.0, yaw=0.0, roll=0.0,
-        fov=90.0, width=1280, height=720, fps=25,
+        fov=90.0,
+        width=aerial_w, height=aerial_h, fps=video.channel_fps("aerial"),
         attach_entity_id=None,  # scenario fills this in
     )))
     # ground: attached_to_actor UGV (s1_fire: vehicle.carlamotors.firetruck).
@@ -95,7 +101,8 @@ def _seed_bindings(camera_manager: CameraManager) -> None:
         id="ground", mode="attached_to_actor",
         # Actor-local: behind cab + above roof (sedan was z=2; firetruck ~+1.8 m).
         x=-4.5, y=0, z=6, pitch=-25, yaw=0.0, roll=0.0,
-        fov=70.0, width=1280, height=720, fps=25,
+        fov=70.0,
+        width=ground_w, height=ground_h, fps=video.channel_fps("ground"),
         attach_entity_id=None,
     )))
 
@@ -130,7 +137,7 @@ async def _run(
     # the signaling route and on-connect snapshot find their FrameQueues
     # immediately. aerial / ground stay unspawned until a scenario (M5) sets
     # their attach_entity_id; city is unattached (world_pose) and spawns now.
-    _seed_bindings(camera_manager)
+    _seed_bindings(camera_manager, settings)
 
     world: World | None = None
     tick_loop: TickLoop | None = None

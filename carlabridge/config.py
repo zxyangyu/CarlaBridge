@@ -40,10 +40,28 @@ class BroadcastCfg(BaseModel):
     metrics_hz: float = 1.0
 
 
+class CameraChannelCfg(BaseModel):
+    resolution: tuple[int, int] | None = None
+    fps: int | None = None
+
+
 class VideoCfg(BaseModel):
     default_fps: int = 25
     default_resolution: tuple[int, int] = (1280, 720)
     frame_queue_drop_log_interval_s: float = 5.0
+    city: CameraChannelCfg = Field(default_factory=CameraChannelCfg)
+    aerial: CameraChannelCfg = Field(default_factory=CameraChannelCfg)
+    ground: CameraChannelCfg = Field(default_factory=CameraChannelCfg)
+
+    def channel_resolution(
+        self, channel: Literal["city", "aerial", "ground"]
+    ) -> tuple[int, int]:
+        cfg = getattr(self, channel)
+        return cfg.resolution if cfg.resolution is not None else self.default_resolution
+
+    def channel_fps(self, channel: Literal["city", "aerial", "ground"]) -> int:
+        cfg = getattr(self, channel)
+        return cfg.fps if cfg.fps is not None else self.default_fps
 
 
 class ScenarioCfg(BaseModel):

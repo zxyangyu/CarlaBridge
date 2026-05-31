@@ -14,12 +14,7 @@ map = "Town10HD_Opt"
 [server]
 host = "0.0.0.0"
 port = 5000
-cors_origins = [
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
-  "https://carla2.zxyangyu.cn",
-  "https://carla.zxyangyu.cn",
-]
+cors_origins = ["*"]
 
 [broadcast]
 state_hz = 10
@@ -27,8 +22,22 @@ metrics_hz = 1
 
 [video]
 default_fps = 25
+# Fallback when a channel omits resolution (see per-channel sections below).
 default_resolution = [1280, 720]
 frame_queue_drop_log_interval_s = 5
+
+# Tuned for urban_frontend @ 1920x1080: grid 22% | 1fr | 22%, VideoSurface object-cover.
+#   city   — center column ~1050x888 px  (AR ~1.18)
+#   aerial — left stack  ~419x396 px each (AR ~1.06)
+#   ground — same slot as aerial
+[video.city]
+resolution = [1280, 1080]
+
+[video.aerial]
+resolution = [848, 800]
+
+[video.ground]
+resolution = [848, 800]
 
 [scenario]
 default = "s1_fire"

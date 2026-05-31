@@ -67,3 +67,24 @@ def test_settings_construct_from_dict():
     # Direct construct (without TOML) — sanity for pydantic defaults.
     s = Settings()
     assert isinstance(s.carla.host, str)
+
+
+def test_default_camera_resolutions():
+    cfg = load_settings()
+    assert cfg.video.channel_resolution("city") == (1280, 1080)
+    assert cfg.video.channel_resolution("aerial") == (848, 800)
+    assert cfg.video.channel_resolution("ground") == (848, 800)
+    assert cfg.video.channel_fps("city") == 25
+
+
+def test_camera_resolution_overlay(tmp_path: Path):
+    overlay = tmp_path / "overlay.toml"
+    overlay.write_text(
+        "[video.city]\nresolution = [1920, 1080]\n"
+        "[video.ground]\nfps = 30\n",
+        encoding="utf-8",
+    )
+    cfg = load_settings(extra_config=overlay)
+    assert cfg.video.channel_resolution("city") == (1920, 1080)
+    assert cfg.video.channel_resolution("aerial") == (848, 800)
+    assert cfg.video.channel_fps("ground") == 30
