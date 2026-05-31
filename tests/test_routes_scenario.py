@@ -13,7 +13,7 @@ from aiohttp.test_utils import TestClient, TestServer
 from carlabridge.bus.projector import FocusBinding
 from carlabridge.bus.server import build_app, make_sio
 from carlabridge.commands.bus import CommandBus
-from carlabridge.config import Settings
+from carlabridge.config import FireMarkerCfg, Settings
 from carlabridge.core.atomic import AtomicRef
 from carlabridge.core.fleet import Fleet
 from carlabridge.core.snapshot import WorldSnapshot
@@ -92,10 +92,20 @@ class _Facade:
 # ---- shared fixture: real aiohttp + Socket.IO + scenario_runner ----------
 
 
+from tests.spawn_config import make_spawn_settings
+
+
+def _test_fire_markers() -> list[FireMarkerCfg]:
+    return [
+        FireMarkerCfg(id="fire-001", x=30.0, y=0.0, z=0.0),
+        FireMarkerCfg(id="fire-002", x=40.0, y=0.0, z=0.0),
+    ]
+
+
 @pytest.fixture
 async def http_bridge():
     """Spin a full HTTP server with a live scenario_runner + drain thread."""
-    settings = Settings()
+    settings = make_spawn_settings(fire_markers=_test_fire_markers())
     event_log = EventLog(capacity=500)
     metrics = Metrics()
     sio = make_sio(settings)
@@ -126,6 +136,7 @@ async def http_bridge():
         camera_manager=cam,
         event_log=event_log,
         command_bus=bus,
+        settings=settings,
     )
     runner.start()
     app["late"]["scenario_runner"] = runner
@@ -146,7 +157,7 @@ async def http_bridge():
     client = TestClient(server)
     await client.start_server()
     try:
-        yield client, runner
+        yield client, runner, settings
     finally:
         stop.set()
         drainer.join(timeout=1.0)
@@ -161,7 +172,7 @@ async def http_bridge():
 
 
 async def test_fire_happy_path(http_bridge):
-    client, runner = http_bridge
+    client, runner, _ = http_bridge
     resp = await client.post("/scenario/fire", json={
         "id": "fire-001",
         "position": {"x": 30.0, "y": 0.0, "z": 0.0},
@@ -175,35 +186,44 @@ async def test_fire_happy_path(http_bridge):
 
 
 async def test_fire_auto_id_when_omitted(http_bridge):
-    client, _ = http_bridge
-    resp = await client.post("/scenario/fire", json={
-        "position": {"x": 10.0, "y": 0.0, "z": 0.0},
-    })
+    client, _, _ = http_bridge
+    resp = await client.post("/scenario/fire", json={})
     assert resp.status == 200
     body = await resp.json()
     assert body["incident_id"].startswith("fire-")
 
 
-async def test_fire_missing_position_400(http_bridge):
-    client, _ = http_bridge
-    resp = await client.post("/scenario/fire", json={"id": "fire-x"})
-    assert resp.status == 400
+async def test_fire_missing_position_uses_config(http_bridge):
+    client, runner, _ = http_bridge
+    resp = await client.post("/scenario/fire", json={"id": "fire-001"})
+    assert resp.status == 200
     body = await resp.json()
-    assert body["reason"] == "parse_error"
+    assert body["position"] == {"x": 30.0, "y": 0.0, "z": 0.0}
+    assert runner.scenario.fleet.get_incident("fire-001") is not None
 
 
-async def test_fire_invalid_position_axis_400(http_bridge):
-    client, _ = http_bridge
+async def test_fire_ignores_request_position(http_bridge):
+    client, _, _ = http_bridge
     resp = await client.post("/scenario/fire", json={
-        "id": "fire-x", "position": {"x": "oops", "y": 0.0},
+        "id": "fire-001",
+        "position": {"x": 999.0, "y": 999.0, "z": 999.0},
     })
-    assert resp.status == 400
+    assert resp.status == 200
     body = await resp.json()
-    assert body["reason"] == "parse_error"
+    assert body["position"] == {"x": 30.0, "y": 0.0, "z": 0.0}
+
+
+async def test_fire_no_markers_configured_503(http_bridge):
+    client, _, settings = http_bridge
+    settings.scenario.fire_markers = []
+    resp = await client.post("/scenario/fire", json={"id": "fire-x"})
+    assert resp.status == 503
+    body = await resp.json()
+    assert body["reason"] == "no_fire_markers_configured"
 
 
 async def test_fire_duplicate_id_409(http_bridge):
-    client, _ = http_bridge
+    client, _, _ = http_bridge
     first = await client.post("/scenario/fire", json={
         "id": "fire-dup", "position": {"x": 0.0, "y": 0.0, "z": 0.0},
     })
@@ -217,7 +237,7 @@ async def test_fire_duplicate_id_409(http_bridge):
 
 
 async def test_fire_during_reset_503(http_bridge):
-    client, runner = http_bridge
+    client, runner, _ = http_bridge
     runner.scenario._resetting = True
     try:
         resp = await client.post("/scenario/fire", json={
@@ -231,7 +251,7 @@ async def test_fire_during_reset_503(http_bridge):
 
 
 async def test_fire_non_json_body_400(http_bridge):
-    client, _ = http_bridge
+    client, _, _ = http_bridge
     resp = await client.post("/scenario/fire", data="not json")
     assert resp.status == 400
 
@@ -240,11 +260,9 @@ async def test_fire_non_json_body_400(http_bridge):
 
 
 async def test_reset_returns_cancelled_and_destroyed(http_bridge):
-    client, runner = http_bridge
+    client, runner, _ = http_bridge
     # Pre-populate with an incident + an in-flight command.
-    await client.post("/scenario/fire", json={
-        "id": "fire-001", "position": {"x": 30.0, "y": 0.0, "z": 0.0},
-    })
+    await client.post("/scenario/fire", json={"id": "fire-001"})
     from carlabridge.commands.enum import CommandKind, ParsedCommand
     runner.scenario.on_command(ParsedCommand(
         id="cmd-A", kind=CommandKind.UAV_GOTO, target="UAV-01",
@@ -261,7 +279,7 @@ async def test_reset_returns_cancelled_and_destroyed(http_bridge):
 
 
 async def test_reset_run_id_monotonic(http_bridge):
-    client, _ = http_bridge
+    client, _, _ = http_bridge
     r1 = await (await client.post("/scenario/reset", json={})).json()
     r2 = await (await client.post("/scenario/reset", json={})).json()
     assert r1["run_id"] == 1
@@ -272,7 +290,7 @@ async def test_reset_run_id_monotonic(http_bridge):
 
 
 async def test_status_baseline_after_setup(http_bridge):
-    client, _ = http_bridge
+    client, _, _ = http_bridge
     resp = await client.get("/scenario/status")
     assert resp.status == 200
     body = await resp.json()
@@ -283,23 +301,21 @@ async def test_status_baseline_after_setup(http_bridge):
     assert body["incidents"] == []
     assert body["in_flight_commands"] == []
     # Entities seeded by setup.
-    assert {"UGV-01", "UAV-01", "UAV-02", "UAV-03"} <= set(body["entities"].keys())
+    assert {"UGV-01", "UAV-01"} <= set(body["entities"].keys())
     # Origins recorded.
     assert "origin" in body["entities"]["UGV-01"]
 
 
 async def test_status_reflects_incident_after_fire(http_bridge):
-    client, _ = http_bridge
-    await client.post("/scenario/fire", json={
-        "id": "fire-001", "position": {"x": 30.0, "y": 0.0, "z": 0.0},
-    })
+    client, _, _ = http_bridge
+    await client.post("/scenario/fire", json={"id": "fire-001"})
     body = await (await client.get("/scenario/status")).json()
     assert len(body["incidents"]) == 1
     assert body["incidents"][0]["id"] == "fire-001"
 
 
 async def test_status_no_sim_hop_works_during_reset(http_bridge):
-    client, runner = http_bridge
+    client, runner, _ = http_bridge
     runner.scenario._resetting = True
     try:
         resp = await client.get("/scenario/status")
@@ -314,7 +330,7 @@ async def test_status_no_sim_hop_works_during_reset(http_bridge):
 
 
 async def test_agent_command_rejected_while_resetting(http_bridge):
-    client, runner = http_bridge
+    client, runner, _ = http_bridge
     import socketio
     runner.scenario._resetting = True
     try:

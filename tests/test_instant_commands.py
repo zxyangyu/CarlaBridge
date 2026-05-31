@@ -29,6 +29,7 @@ from carlabridge.bus.projector import FocusBinding
 from carlabridge.bus.server import build_app, make_sio
 from carlabridge.commands.bus import CommandBus
 from carlabridge.config import Settings
+from tests.spawn_config import make_spawn_settings
 from carlabridge.core.atomic import AtomicRef
 from carlabridge.core.fleet import Fleet, Pose
 from carlabridge.core.incident import Incident
@@ -109,7 +110,7 @@ class _Facade:
 @pytest.fixture
 async def live_bridge_with_ticker():
     """Live HTTP + Socket.IO + ticker thread driving the scenario lifecycle."""
-    settings = Settings()
+    settings = make_spawn_settings()
     event_log = EventLog(capacity=500)
     metrics = Metrics()
     sio = make_sio(settings)
@@ -160,6 +161,7 @@ async def live_bridge_with_ticker():
         event_log=event_log,
         command_bus=bus,
         sim_time_provider=lambda: 0.0,
+        settings=settings,
     )
     runner.start()
     app["late"]["scenario_runner"] = runner
@@ -339,7 +341,7 @@ async def test_two_distinct_entity_instants_both_complete(live_bridge_with_ticke
     try:
         ack_h = await sio_client.call(
             "agent.command",
-            {"id": "h-1", "kind": "UAV_HOLD", "target": "UAV-02"},
+            {"id": "h-1", "kind": "UAV_HOLD", "target": "UAV-01"},
             namespace="/agent", timeout=2,
         )
         assert ack_h["status"] == "accepted"

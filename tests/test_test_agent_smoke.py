@@ -24,7 +24,8 @@ from carlabridge.bus.broadcaster import Broadcaster
 from carlabridge.bus.projector import FocusBinding
 from carlabridge.bus.server import build_app, make_sio
 from carlabridge.commands.bus import CommandBus
-from carlabridge.config import Settings
+from carlabridge.config import FireMarkerCfg
+from tests.spawn_config import make_spawn_settings
 from carlabridge.core.atomic import AtomicRef
 from carlabridge.core.fleet import Fleet
 from carlabridge.core.snapshot import SnapshotBuilder, WorldSnapshot
@@ -118,7 +119,9 @@ class _Facade:
 
 @pytest.fixture
 async def live_bridge_full():
-    settings = Settings()
+    settings = make_spawn_settings(
+        fire_markers=[FireMarkerCfg(id="fire-001", x=1.0, y=0.0, z=0.0)],
+    )
     settings.broadcast.state_hz = 20.0  # faster for tests
     event_log = EventLog(capacity=500)
     metrics = Metrics()
@@ -169,6 +172,7 @@ async def live_bridge_full():
         event_log=event_log,
         command_bus=bus,
         sim_time_provider=lambda: 0.0,
+        settings=settings,
     )
     runner.start()
     app["late"]["scenario_runner"] = runner
@@ -281,7 +285,7 @@ async def test_test_agent_patrol_then_fire_then_extinguish(live_bridge_full):
         # 1. PATROL × 3 lands after first snapshot.
         def patrolled():
             kinds = {f.kind.value for f in runner.scenario._in_flight.values()}
-            return kinds == {"UAV_PATROL"} and len(runner.scenario._in_flight) == 3
+            return kinds == {"UAV_PATROL"} and len(runner.scenario._in_flight) == 1
         await _wait(patrolled, timeout=8.0)
 
         # 2. Ignite a fire close to the UGV (UGV is at (0,0,0)).
@@ -351,7 +355,7 @@ async def test_test_agent_replays_patrol_after_reset(live_bridge_full):
             lambda: sum(
                 1 for f in runner.scenario._in_flight.values()
                 if f.kind.value == "UAV_PATROL"
-            ) == 3,
+            ) == 1,
             timeout=3.0,
         )
 
@@ -374,7 +378,7 @@ async def test_test_agent_replays_patrol_after_reset(live_bridge_full):
             lambda: sum(
                 1 for f in runner.scenario._in_flight.values()
                 if f.kind.value == "UAV_PATROL"
-            ) == 3,
+            ) == 1,
             timeout=3.0,
         )
     finally:

@@ -26,7 +26,7 @@ NAMESPACE = "/agent"
 AGENT_ID = "test-agent"
 PROTOCOL_VERSION = "1.0"
 
-UAV_IDS = ("UAV-01", "UAV-02", "UAV-03")
+UAV_IDS = ("UAV-01",)
 UGV_ID = "UGV-01"
 
 PATROL_DELTAS = ((5.0, 0.0, 0.0), (5.0, 5.0, 0.0), (0.0, 5.0, 0.0))

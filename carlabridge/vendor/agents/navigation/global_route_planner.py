@@ -251,13 +251,19 @@ class GlobalRoutePlanner:
                     n2_xyz = (path[-1].transform.location.x,
                               path[-1].transform.location.y,
                               path[-1].transform.location.z)
-                    self._graph.add_node(n2, vertex=n2_xyz)
-                    self._graph.add_edge(
-                        n1, n2,
-                        length=len(path) + 1, path=path,
-                        entry_waypoint=end_wp, exit_waypoint=path[-1],
-                        entry_vector=None, exit_vector=None, net_vector=None,
-                        intersection=end_wp.is_junction, type=RoadOption.LANEFOLLOW)
+                    exit_tail_wp = path[-1]
+                else:
+                    # Dead-end lane: no extension past exit, but _localize still
+                    # returns (n1, n2) and _path_search appends n2 — must register edge.
+                    n2_xyz = exit_xyz
+                    exit_tail_wp = end_wp
+                self._graph.add_node(n2, vertex=n2_xyz)
+                self._graph.add_edge(
+                    n1, n2,
+                    length=len(path) + 1, path=path,
+                    entry_waypoint=end_wp, exit_waypoint=exit_tail_wp,
+                    entry_vector=None, exit_vector=None, net_vector=None,
+                    intersection=end_wp.is_junction, type=RoadOption.LANEFOLLOW)
 
     def _lane_change_link(self):
         """
@@ -339,7 +345,9 @@ class GlobalRoutePlanner:
         route = nx.astar_path(
             self._graph, source=start[0], target=end[0],
             heuristic=self._distance_heuristic, weight='length')
-        route.append(end[1])
+        # Tail node (often a negative loose-end id) is only valid if the edge exists.
+        if end[1] != route[-1] and self._graph.has_edge(route[-1], end[1]):
+            route.append(end[1])
         return route
 
     def _successive_last_intersection_edge(self, index, route):

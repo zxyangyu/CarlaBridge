@@ -44,6 +44,7 @@ class ScenarioRunner:
         event_log: "EventLog",
         sim_time_provider: Callable[[], float] = lambda: 0.0,
         command_bus: "CommandBus | None" = None,
+        settings: Any | None = None,
     ) -> None:
         self._scenario_cls = scenario_cls
         self._world = world
@@ -52,6 +53,7 @@ class ScenarioRunner:
         self._event_log = event_log
         self._sim_time = sim_time_provider
         self._command_bus = command_bus
+        self._settings = settings
         self._state: State = "idle"
         self._scenario: Scenario | None = None
         self._failure: BaseException | None = None
@@ -90,6 +92,7 @@ class ScenarioRunner:
             camera_manager=self._camera_manager,
             event_log=self._event_log,
             command_bus=self._command_bus,
+            settings=self._settings,
         )
         # Inject sim_time provider so the scenario can stamp incidents /
         # in-flight commands with the current sim_time.

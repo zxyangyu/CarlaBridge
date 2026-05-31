@@ -80,8 +80,29 @@ class VideoCfg(BaseModel):
         return cfg.fps if cfg.fps is not None else self.default_fps
 
 
+class FireMarkerCfg(BaseModel):
+    """Preset fire / incident spawn position (used by POST /scenario/fire)."""
+
+    x: float
+    y: float
+    z: float = 0.5
+    id: str | None = None
+
+
+class EntitySpawnCfg(BaseModel):
+    """Fixed world-frame spawn pose for UGV / virtual UAV."""
+
+    x: float
+    y: float
+    z: float = 0.5
+    yaw: float = 0.0
+
+
 class ScenarioCfg(BaseModel):
     default: str = "s1_fire"
+    fire_markers: list[FireMarkerCfg] = Field(default_factory=list)
+    vehicle_spawn: EntitySpawnCfg | None = None
+    uav_spawn: EntitySpawnCfg | None = None
 
 
 class LoggingCfg(BaseModel):

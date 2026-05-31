@@ -23,6 +23,7 @@ from carlabridge.core.fleet import Fleet
 from carlabridge.obs.event_log import EventLog
 from carlabridge.scenarios.s1_fire import S1FireScenario
 from carlabridge.sensors.camera import CameraBinding, CameraManager, CameraSpec
+from tests.spawn_config import make_spawn_settings
 from tests.test_camera_manager import FakeSpawner
 
 
@@ -100,12 +101,14 @@ def _make_scen() -> tuple[S1FireScenario, CommandBus, list[dict], EventLog]:
     statuses: list[dict] = []
     bus.set_on_command_status(statuses.append)
     evlog = EventLog(capacity=2000)
+    settings = make_spawn_settings()
     scen = S1FireScenario(
         world=_Facade(_CarlaWorld()),
         fleet=Fleet(),
         camera_manager=cam,
         event_log=evlog,
         command_bus=bus,
+        settings=settings,
     )
     scen.setup()
     return scen, bus, statuses, evlog
@@ -159,6 +162,6 @@ def test_no_auto_target_on_uavs_after_setup():
     """Old setup auto-armed UAV-01 toward the fire marker. Refactor v0.3
     forbids that — UAVs only move when an Agent sends PATROL/GOTO."""
     scen, _, _, _ = _make_scen()
-    for eid in ("UAV-01", "UAV-02", "UAV-03"):
+    for eid in ("UAV-01",):
         uav = scen.fleet.get(eid)
         assert uav.target is None, f"{eid} has implicit target {uav.target}"

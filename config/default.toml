@@ -17,7 +17,7 @@ port = 5000
 cors_origins = ["*"]
 
 [broadcast]
-state_hz = 10
+state_hz = 1
 metrics_hz = 1
 
 [video]
@@ -32,11 +32,11 @@ frame_queue_drop_log_interval_s = 5
 #   ground — same slot as aerial
 # city overview (world_pose) — tune x/y/z for your CARLA map center / demo area
 [camera.city]
-x = 243.32
-y = -50.10
-z = 200.0
+x = 237.9619691563268
+y = -25.26569342884618
+z = 45.0
 pitch = -90.0
-yaw = 0.0
+yaw = -90.0
 roll = 0.0
 fov = 90.0
 
@@ -51,6 +51,26 @@ resolution = [424, 400]
 
 [scenario]
 default = "s1_fire"
+
+# UGV + virtual UAV spawn poses (design_poses.py → config/design_poses.json).
+[scenario.vehicle_spawn]
+x = 214.33909606933594
+y = -43.19072341918945
+z = 0.5
+yaw = 0.4857255220413208
+
+[scenario.uav_spawn]
+x = 214.33909606933594
+y = -43.19072341918945
+z = 10.5
+yaw = 0.4857255220413208
+
+# Fire incident positions — POST /scenario/fire ignores request body position.
+[[scenario.fire_markers]]
+id = "fire-001"
+x = 250
+y = -23
+z = 0.5
 
 [logging]
 level = "INFO"

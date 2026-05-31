@@ -13,6 +13,7 @@ from carlabridge.core.fleet import CarlaActorMember, Fleet
 from carlabridge.obs.event_log import EventLog
 from carlabridge.scenarios.s1_fire import S1FireScenario
 from carlabridge.sensors.camera import CameraManager
+from tests.spawn_config import make_spawn_settings
 from tests.test_camera_manager import FakeSpawner
 
 
@@ -122,12 +123,14 @@ def _make_scen() -> tuple[S1FireScenario, _FakeCarlaWorld, CameraManager, Comman
     bus = CommandBus(maxsize=8)
     statuses: list[dict] = []
     bus.set_on_command_status(statuses.append)
+    settings = make_spawn_settings()
     scen = S1FireScenario(
         world=_WorldFacade(carla),
         fleet=Fleet(),
         camera_manager=cam,
         event_log=EventLog(capacity=200),
         command_bus=bus,
+        settings=settings,
     )
     scen.attach_sim_time_provider(lambda: 0.0)
     scen.setup()
@@ -149,12 +152,21 @@ def test_reset_increments_run_id():
 
 def test_reset_cancels_all_in_flight():
     scen, _, _, _, statuses = _make_scen()
+
+    class _FakeFollower:
+        def set_destination(self, *a, **kw): pass
+        def run_step(self): return None
+        def done(self): return False
+
+    scen._make_follower = lambda _a, _m: _FakeFollower()  # type: ignore[method-assign]
+    scen._set_destination = lambda _f, _d: None           # type: ignore[method-assign]
+
     scen.on_command(ParsedCommand(id="cmd-01", kind=CommandKind.UAV_GOTO, target="UAV-01",
                                   params={"waypoint": {"x": 100, "y": 0, "z": 60},
                                           "cruise_speed": 1.0}))
-    scen.on_command(ParsedCommand(id="cmd-02", kind=CommandKind.UAV_GOTO, target="UAV-02",
-                                  params={"waypoint": {"x": 200, "y": 0, "z": 60},
-                                          "cruise_speed": 1.0}))
+    scen.on_command(ParsedCommand(id="cmd-02", kind=CommandKind.UGV_GOTO, target="UGV-01",
+                                  params={"dest": {"x": 200, "y": 0, "z": 0},
+                                          "target_speed": 25.0}))
     r = scen.reset()
     assert set(r["cancelled_commands"]) == {"cmd-01", "cmd-02"}
     cancellations = [s for s in statuses if s["status"] == "cancelled"]
@@ -213,7 +225,7 @@ def test_reset_refills_origins_for_all_entities():
     scen.reset()
     after = scen.fleet.origins()
     assert set(after.keys()) == set(before.keys())
-    assert set(after.keys()) == {"UGV-01", "UAV-01", "UAV-02", "UAV-03"}
+    assert set(after.keys()) == {"UGV-01", "UAV-01"}
 
 
 def test_reset_during_reset_raises():

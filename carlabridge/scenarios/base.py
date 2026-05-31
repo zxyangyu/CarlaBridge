@@ -83,11 +83,13 @@ class Scenario:
         camera_manager: "CameraManager",
         event_log: "EventLog",
         command_bus: "CommandBus | None" = None,
+        settings: Any | None = None,
     ) -> None:
         self.world = world
         self.fleet = fleet
         self.camera_manager = camera_manager
         self.event_log = event_log
+        self.settings = settings
         # Refactor v0.3 — wired through by the ScenarioRunner once R6 lands.
         # None during R3 unit tests, which exercise the lifecycle in isolation.
         self.command_bus = command_bus

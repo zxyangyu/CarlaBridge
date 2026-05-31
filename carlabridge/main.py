@@ -278,6 +278,7 @@ async def _run(
                 event_log=event_log,
                 sim_time_provider=lambda c=clock: c.sim_time,
                 command_bus=command_bus,
+                settings=settings,
             )
             try:
                 scenario = scenario_runner.start()

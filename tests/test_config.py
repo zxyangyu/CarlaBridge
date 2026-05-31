@@ -77,6 +77,53 @@ def test_default_camera_resolutions():
     assert cfg.video.channel_fps("city") == 25
 
 
+def test_default_fire_markers():
+    cfg = load_settings()
+    assert len(cfg.scenario.fire_markers) == 1
+    marker = cfg.scenario.fire_markers[0]
+    assert marker.id == "fire-001"
+    assert marker.x == pytest.approx(250)
+    assert marker.y == pytest.approx(-23)
+    assert marker.z == pytest.approx(0.5)
+
+
+def test_fire_markers_overlay(tmp_path: Path):
+    overlay = tmp_path / "overlay.toml"
+    overlay.write_text(
+        '[[scenario.fire_markers]]\nid = "fire-002"\nx = 10.0\ny = 20.0\nz = 1.0\n',
+        encoding="utf-8",
+    )
+    cfg = load_settings(extra_config=overlay)
+    assert len(cfg.scenario.fire_markers) == 1
+    assert cfg.scenario.fire_markers[0].id == "fire-002"
+    assert cfg.scenario.fire_markers[0].x == pytest.approx(10.0)
+
+
+def test_default_spawn_poses():
+    cfg = load_settings()
+    vehicle = cfg.scenario.vehicle_spawn
+    uav = cfg.scenario.uav_spawn
+    assert vehicle is not None
+    assert uav is not None
+    assert vehicle.x == pytest.approx(214.33909606933594)
+    assert vehicle.y == pytest.approx(-43.19072341918945)
+    assert uav.z == pytest.approx(10.5)
+
+
+def test_spawn_pose_overlay(tmp_path: Path):
+    overlay = tmp_path / "overlay.toml"
+    overlay.write_text(
+        "[scenario.vehicle_spawn]\nx = 1.0\ny = 2.0\nz = 0.5\nyaw = 90.0\n"
+        "[scenario.uav_spawn]\nx = 1.0\ny = 2.0\nz = 20.0\nyaw = 90.0\n",
+        encoding="utf-8",
+    )
+    cfg = load_settings(extra_config=overlay)
+    assert cfg.scenario.vehicle_spawn is not None
+    assert cfg.scenario.uav_spawn is not None
+    assert cfg.scenario.vehicle_spawn.x == pytest.approx(1.0)
+    assert cfg.scenario.uav_spawn.z == pytest.approx(20.0)
+
+
 def test_default_city_overview_pose():
     cfg = load_settings()
     pose = cfg.camera.city

@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING
 
 from aiohttp import web
 
+from carlabridge.config import FireMarkerCfg, Settings
+
 if TYPE_CHECKING:  # pragma: no cover
     from carlabridge.scenarios.runner import ScenarioRunner
 
@@ -55,6 +57,34 @@ def _err(status: int, reason: str, **detail) -> web.Response:
     return web.json_response(body, status=status)
 
 
+def _resolve_fire_position(
+    markers: list[FireMarkerCfg],
+    *,
+    incident_id: str | None,
+    existing_count: int,
+) -> dict[str, float] | None:
+    """Pick a fire marker from config; request-body position is ignored."""
+    if not markers:
+        return None
+
+    if incident_id:
+        for marker in markers:
+            if marker.id and marker.id == incident_id:
+                return {"x": marker.x, "y": marker.y, "z": marker.z}
+        if incident_id.startswith("fire-"):
+            try:
+                idx = int(incident_id.rsplit("-", 1)[-1]) - 1
+                if 0 <= idx < len(markers):
+                    marker = markers[idx]
+                    return {"x": marker.x, "y": marker.y, "z": marker.z}
+            except ValueError:
+                pass
+
+    idx = min(existing_count, len(markers) - 1)
+    marker = markers[idx]
+    return {"x": marker.x, "y": marker.y, "z": marker.z}
+
+
 # ---- POST /scenario/fire --------------------------------------------------
 
 
@@ -70,14 +100,15 @@ async def _fire(request: web.Request) -> web.Response:
         return _err(400, "parse_error", message="body must be JSON")
     if not isinstance(body, dict):
         return _err(400, "parse_error", message="body must be a JSON object")
-    position = body.get("position")
-    if not isinstance(position, dict):
-        return _err(400, "parse_error", field="position",
-                    message="position required as {x,y,z}")
-    for axis in ("x", "y"):  # z optional, falls back to anchor.z in scenario
-        if not isinstance(position.get(axis), (int, float)) or isinstance(position.get(axis), bool):
-            return _err(400, "parse_error", field=f"position.{axis}",
-                        message="must be numeric")
+
+    settings: Settings = request.app["settings"]
+    position = _resolve_fire_position(
+        settings.scenario.fire_markers,
+        incident_id=body.get("id"),
+        existing_count=len(runner.scenario.fleet.incidents()),
+    )
+    if position is None:
+        return _err(503, "no_fire_markers_configured")
 
     kwargs = {
         "id": body.get("id"),

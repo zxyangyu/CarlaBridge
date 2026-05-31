@@ -21,6 +21,7 @@ from carlabridge.bus.projector import FocusBinding
 from carlabridge.bus.server import build_app, make_sio
 from carlabridge.commands.bus import CommandBus
 from carlabridge.config import Settings
+from tests.spawn_config import make_spawn_settings
 from carlabridge.core.atomic import AtomicRef
 from carlabridge.core.fleet import Fleet
 from carlabridge.core.snapshot import WorldSnapshot
@@ -99,7 +100,7 @@ class _Facade:
 
 @pytest.fixture
 async def live_bridge_with_ticker():
-    settings = Settings()
+    settings = make_spawn_settings()
     event_log = EventLog(capacity=500)
     metrics = Metrics()
     sio = make_sio(settings)
@@ -149,6 +150,7 @@ async def live_bridge_with_ticker():
         event_log=event_log,
         command_bus=bus,
         sim_time_provider=lambda: 0.0,
+        settings=settings,
     )
     runner.start()
     app["late"]["scenario_runner"] = runner
@@ -227,7 +229,7 @@ async def _wait_until(predicate, timeout: float = 2.0) -> None:
 # ---- the test ------------------------------------------------------------
 
 
-async def test_reset_cancels_two_uav_goto_and_one_ugv_goto(live_bridge_with_ticker):
+async def test_reset_cancels_uav_goto_and_ugv_goto(live_bridge_with_ticker):
     client, runner = live_bridge_with_ticker
 
     sio_client = socketio.AsyncClient()
@@ -244,14 +246,11 @@ async def test_reset_cancels_two_uav_goto_and_one_ugv_goto(live_bridge_with_tick
 
     await sio_client.connect(_url(client), namespaces=["/agent"])
     try:
-        # 1. Fire 2 UAV_GOTOs + 1 UGV_GOTO with distant targets so none of
-        # them auto-complete before /reset.
+        # 1. Fire 1 UAV_GOTO + 1 UGV_GOTO with distant targets so neither
+        # auto-completes before /reset.
         cmds = [
             ("cmd-uav-1", "UAV_GOTO", "UAV-01",
              {"waypoint": {"x": 10000.0, "y": 0.0, "z": 60.0},
-              "cruise_speed": 0.1}),
-            ("cmd-uav-2", "UAV_GOTO", "UAV-02",
-             {"waypoint": {"x": -10000.0, "y": 0.0, "z": 60.0},
               "cruise_speed": 0.1}),
             ("cmd-ugv", "UGV_GOTO", "UGV-01",
              {"dest": {"x": 10000.0, "y": 0.0, "z": 0.0},
@@ -265,9 +264,9 @@ async def test_reset_cancels_two_uav_goto_and_one_ugv_goto(live_bridge_with_tick
             )
             assert ack["status"] == "accepted", f"{cid} not accepted: {ack}"
 
-        # 2. Wait until all 3 are registered in-flight (ticker has drained).
+        # 2. Wait until both are registered in-flight (ticker has drained).
         await _wait_until(
-            lambda: len(runner.scenario._in_flight) == 3,
+            lambda: len(runner.scenario._in_flight) == 2,
             timeout=2.0,
         )
 
@@ -276,15 +275,15 @@ async def test_reset_cancels_two_uav_goto_and_one_ugv_goto(live_bridge_with_tick
             assert resp.status == 200
             body = await resp.json()
         assert body["status"] == "ok"
-        assert set(body["cancelled_commands"]) == {"cmd-uav-1", "cmd-uav-2", "cmd-ugv"}
+        assert set(body["cancelled_commands"]) == {"cmd-uav-1", "cmd-ugv"}
         assert body["run_id"] == 1
 
-        # 4. Three cancelled(reason=reset) events arrived for our cmd ids.
+        # 4. Two cancelled(reason=reset) events arrived for our cmd ids.
         await _wait_until(
             lambda: {
                 p["cmd_id"] for p in received
                 if p["status"] == "cancelled" and p["reason"] == "reset"
-            } >= {"cmd-uav-1", "cmd-uav-2", "cmd-ugv"},
+            } >= {"cmd-uav-1", "cmd-ugv"},
             timeout=2.0,
         )
         cancellations = [
@@ -292,7 +291,7 @@ async def test_reset_cancels_two_uav_goto_and_one_ugv_goto(live_bridge_with_tick
             if p["status"] == "cancelled" and p["reason"] == "reset"
         ]
         by_id = {p["cmd_id"]: p for p in cancellations}
-        assert set(by_id.keys()) == {"cmd-uav-1", "cmd-uav-2", "cmd-ugv"}
+        assert set(by_id.keys()) == {"cmd-uav-1", "cmd-ugv"}
         for p in cancellations:
             assert p["detail"] == {"trigger": "http"}
 

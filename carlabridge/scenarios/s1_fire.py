@@ -2,7 +2,7 @@
 
 Bridge is the **execution layer** for this scenario (design §1):
 
-* ``setup()`` spawns one UGV, registers 3 virtual UAVs, binds cameras, and
+* ``setup()`` spawns one UGV, registers 1 virtual UAV, binds cameras, and
   fills ``fleet.origins`` so ``*_RTL`` commands have somewhere to go back to.
 * ``on_command()`` dispatches the 8 commands (design §3.2) through
   ``_accept_command`` (supersede) + private ``_handle_*`` methods.
@@ -29,6 +29,7 @@ from carlabridge.scenarios.in_flight import InFlightCommand
 from carlabridge.scenarios.waypoint_follower import SimpleWaypointFollower
 
 if TYPE_CHECKING:  # pragma: no cover
+    from carlabridge.config import Settings
     import carla
 
 log = logging.getLogger(__name__)
@@ -53,8 +54,7 @@ FIRE_MARKER_BLUEPRINTS = (
     "static.prop.kiosk_01",
 )
 
-UAV_ALTITUDE = 10.0          # meters above the anchor
-UAV_SPREAD = 20.0            # horizontal spread between UAVs
+UAV_ALTITUDE = 10.0          # default offset for design_poses export only
 
 # Refactor v0.3 — config-pinned thresholds (design §7.7)
 UAV_ARRIVAL_EPS_M = 0.5            # UAV GOTO/RTL/PATROL waypoint reach radius
@@ -70,10 +70,10 @@ DEFAULT_UGV_TARGET_SPEED_KMH = 25.0
 
 @register_scenario("s1_fire")
 class S1FireScenario(Scenario):
-    """3 UAVs + 1 UGV + 0..N fire incidents; cameras bound to UAV-01 / UGV-01."""
+    """1 UAV + 1 UGV + 0..N fire incidents; cameras bound to UAV-01 / UGV-01."""
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, *, settings: "Settings | None" = None, **kwargs):
+        super().__init__(settings=settings, **kwargs)
         # UGV follower: non-None when a GOTO/RTL is in flight.
         self._ugv_follower: SimpleWaypointFollower | None = None
         # Anchor of the spawn point used by setup; needed for fallbacks.
@@ -88,13 +88,24 @@ class S1FireScenario(Scenario):
 
     # ---- lifecycle ----------------------------------------------------
 
+    def _require_spawn_config(self):
+        from carlabridge.config import EntitySpawnCfg
+
+        if self.settings is None:
+            raise RuntimeError("S1: settings not provided to scenario")
+        vehicle_spawn = self.settings.scenario.vehicle_spawn
+        uav_spawn = self.settings.scenario.uav_spawn
+        if vehicle_spawn is None or uav_spawn is None:
+            raise RuntimeError(
+                "S1: scenario.vehicle_spawn and scenario.uav_spawn must be set in config"
+            )
+        if not isinstance(vehicle_spawn, EntitySpawnCfg) or not isinstance(uav_spawn, EntitySpawnCfg):
+            raise RuntimeError("S1: invalid spawn config types")
+        return vehicle_spawn, uav_spawn
+
     def setup(self) -> None:
         carla_world = self.world.carla_world
-
-        spawn_points = carla_world.get_map().get_spawn_points()
-        if not spawn_points:
-            raise RuntimeError("Town10HD_Opt: no spawn points returned")
-        log.info("S1: %d spawn points available", len(spawn_points))
+        vehicle_spawn, uav_spawn = self._require_spawn_config()
 
         bp_lib = carla_world.get_blueprint_library()
         preferred = list(_filter_existing(bp_lib, UGV_BLUEPRINT_CANDIDATES))
@@ -106,39 +117,44 @@ class S1FireScenario(Scenario):
                 continue
             seen_ids.add(bp.id)
             candidates.append(bp)
+        if not candidates:
+            raise RuntimeError("S1: no UGV blueprint available in CARLA library")
+
+        spawn_transform = _make_transform(
+            x=vehicle_spawn.x,
+            y=vehicle_spawn.y,
+            z=vehicle_spawn.z,
+            yaw=vehicle_spawn.yaw,
+        )
         log.info(
-            "S1: trying %d vehicle blueprint(s) across %d spawn point(s)",
-            len(candidates), len(spawn_points),
+            "S1: spawning UGV at configured (%.1f, %.1f, %.1f) yaw=%.1f",
+            vehicle_spawn.x, vehicle_spawn.y, vehicle_spawn.z, vehicle_spawn.yaw,
         )
 
         ugv_actor = None
-        anchor = None
-        for tf in spawn_points:
-            for bp in candidates:
-                try:
-                    actor = carla_world.try_spawn_actor(bp, tf)
-                except Exception:
-                    log.exception("UGV: spawn(%s) raised", bp.id)
-                    continue
-                if actor is not None:
-                    ugv_actor = actor
-                    anchor = tf
-                    log.info(
-                        "UGV spawned: bp=%s actor_id=%d at (%.1f, %.1f, %.1f)",
-                        bp.id, actor.id,
-                        tf.location.x, tf.location.y, tf.location.z,
-                    )
-                    break
-            if ugv_actor is not None:
+        for bp in candidates:
+            try:
+                actor = carla_world.try_spawn_actor(bp, spawn_transform)
+            except Exception:
+                log.exception("UGV: spawn(%s) raised", bp.id)
+                continue
+            if actor is not None:
+                ugv_actor = actor
+                log.info(
+                    "UGV spawned: bp=%s actor_id=%d at (%.1f, %.1f, %.1f)",
+                    bp.id, actor.id,
+                    vehicle_spawn.x, vehicle_spawn.y, vehicle_spawn.z,
+                )
                 break
-        if ugv_actor is None or anchor is None:
+        if ugv_actor is None:
             raise RuntimeError(
-                f"S1: no UGV could be spawned ({len(candidates)} blueprints × "
-                f"{len(spawn_points)} spawn points failed)"
+                f"S1: no UGV could be spawned at configured pose "
+                f"({vehicle_spawn.x}, {vehicle_spawn.y}, {vehicle_spawn.z})"
             )
-        ax, ay, az = anchor.location.x, anchor.location.y, anchor.location.z
+
+        ax, ay, az = vehicle_spawn.x, vehicle_spawn.y, vehicle_spawn.z
         self._anchor_world_xyz = (ax, ay, az)
-        self._anchor_yaw = anchor.rotation.yaw
+        self._anchor_yaw = vehicle_spawn.yaw
 
         self._register_actor(ugv_actor)
         self.fleet.register(
@@ -146,31 +162,28 @@ class S1FireScenario(Scenario):
         )
         self._register_entity("UGV-01")
         self.fleet.set_origin(
-            "UGV-01", Pose(x=ax, y=ay, z=az, yaw=anchor.rotation.yaw)
+            "UGV-01", Pose(x=ax, y=ay, z=az, yaw=vehicle_spawn.yaw)
         )
         self.event_log.add(
             "ok", "SCENARIO",
             f"UGV-01 spawned ({ugv_actor.type_id}) at ({ax:.1f}, {ay:.1f}, {az:.1f})",
         )
 
-        # 3 virtual UAVs spaced along x; each origin recorded for *_RTL.
-        for i, dx in enumerate((-UAV_SPREAD, 0.0, UAV_SPREAD), start=1):
-            eid = f"UAV-0{i}"
-            origin = Pose(
-                x=ax + dx, y=ay, z=az + UAV_ALTITUDE,
-                yaw=anchor.rotation.yaw,
-            )
-            uav = VirtualMember(
-                entity_id=eid, role="patrol",
-                _pose=origin,
-                altitude=origin.z, heading=origin.yaw, battery=100.0,
-            )
-            self.fleet.register(uav)
-            self._register_entity(eid)
-            self.fleet.set_origin(eid, origin)
+        origin = Pose(
+            x=uav_spawn.x, y=uav_spawn.y, z=uav_spawn.z,
+            yaw=uav_spawn.yaw,
+        )
+        uav = VirtualMember(
+            entity_id="UAV-01", role="patrol",
+            _pose=origin,
+            altitude=origin.z, heading=origin.yaw, battery=100.0,
+        )
+        self.fleet.register(uav)
+        self._register_entity("UAV-01")
+        self.fleet.set_origin("UAV-01", origin)
         self.event_log.add(
             "ok", "SCENARIO",
-            f"3 virtual UAVs registered at altitude {UAV_ALTITUDE}m",
+            f"virtual UAV-01 registered at ({origin.x:.1f}, {origin.y:.1f}, {origin.z:.1f})",
         )
 
         # Bind cameras (FrameQueue instances stay across reset).

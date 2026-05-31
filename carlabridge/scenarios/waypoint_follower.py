@@ -91,8 +91,10 @@ class SimpleWaypointFollower:
                 for (wp, _opt) in trace
             ]
         except Exception:
-            log.exception("WaypointFollower: GRP failed; falling back to direct segment")
-            self._waypoints = []
+            log.exception("WaypointFollower: GRP failed; falling back to lane waypoints")
+            self._waypoints = _lane_waypoint_fallback(
+                carla_map, start_loc, end_location, DEFAULT_SAMPLING_RES_M
+            )
         # Always append the literal destination so the follower targets it
         # even if GRP rounded to lane center.
         self._final_xyz = (end_location.x, end_location.y, end_location.z)
@@ -188,6 +190,24 @@ class SimpleWaypointFollower:
 
 
 # ---------- math helpers (kept module-level for unit testing) ----------
+
+
+def _lane_waypoint_fallback(carla_map, start_loc, end_loc, step_m: float) -> list:
+    """Greedy lane-following chain when GlobalRoutePlanner fails (e.g. custom maps)."""
+    wp = carla_map.get_waypoint(start_loc, project_to_road=True)
+    if wp is None:
+        return []
+    pts: list = []
+    for _ in range(2000):
+        loc = wp.transform.location
+        pts.append((loc.x, loc.y, loc.z))
+        if loc.distance(end_loc) < step_m * 2:
+            break
+        options = wp.next(step_m)
+        if not options:
+            break
+        wp = min(options, key=lambda w: w.transform.location.distance(end_loc))
+    return pts
 
 
 def _xy_distance(x1: float, y1: float, x2: float, y2: float) -> float:
