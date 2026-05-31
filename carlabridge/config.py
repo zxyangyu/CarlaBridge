@@ -40,9 +40,25 @@ class BroadcastCfg(BaseModel):
     metrics_hz: float = 1.0
 
 
+class WorldPoseCameraCfg(BaseModel):
+    """Fixed world-frame pose for the ``city`` overview channel (mode=world_pose)."""
+
+    x: float = 0.0
+    y: float = 40.0
+    z: float = 200.0
+    pitch: float = -90.0
+    yaw: float = 0.0
+    roll: float = 0.0
+    fov: float = 90.0
+
+
 class CameraChannelCfg(BaseModel):
     resolution: tuple[int, int] | None = None
     fps: int | None = None
+
+
+class CameraCfg(BaseModel):
+    city: WorldPoseCameraCfg = Field(default_factory=WorldPoseCameraCfg)
 
 
 class VideoCfg(BaseModel):
@@ -83,6 +99,7 @@ class Settings(BaseSettings):
     carla: CarlaCfg = Field(default_factory=CarlaCfg)
     server: ServerCfg = Field(default_factory=ServerCfg)
     broadcast: BroadcastCfg = Field(default_factory=BroadcastCfg)
+    camera: CameraCfg = Field(default_factory=CameraCfg)
     video: VideoCfg = Field(default_factory=VideoCfg)
     scenario: ScenarioCfg = Field(default_factory=ScenarioCfg)
     logging: LoggingCfg = Field(default_factory=LoggingCfg)

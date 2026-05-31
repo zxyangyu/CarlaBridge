@@ -78,12 +78,12 @@ def _seed_bindings(camera_manager: CameraManager, settings: Settings) -> None:
     city_w, city_h = video.channel_resolution("city")
     aerial_w, aerial_h = video.channel_resolution("aerial")
     ground_w, ground_h = video.channel_resolution("ground")
-    # city: world_pose high overhead, Town10HD-friendly z=200, pitch -90°
+    city_pose = settings.camera.city
     camera_manager.bind(CameraBinding(spec=CameraSpec(
         id="city", mode="world_pose",
-        x=0.0, y=40.0, z=200.0,
-        pitch=-90.0, yaw=0.0, roll=0.0,
-        fov=90.0,
+        x=city_pose.x, y=city_pose.y, z=city_pose.z,
+        pitch=city_pose.pitch, yaw=city_pose.yaw, roll=city_pose.roll,
+        fov=city_pose.fov,
         width=city_w, height=city_h, fps=video.channel_fps("city"),
     )))
     # aerial: follows_virtual UAV — scenario must set attach_entity_id at setup.

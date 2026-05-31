@@ -23,7 +23,7 @@ def test_default_config_loads():
     test). Stable identifiers (map name, port, scenario) keep exact equality.
     """
     cfg = load_settings()
-    assert cfg.carla.map == "Town10HD_Opt"
+    assert cfg.carla.map == "sandbox-v19"
     assert isinstance(cfg.carla.fixed_delta_seconds, float)
     assert cfg.carla.fixed_delta_seconds > 0
     assert cfg.server.port == 5000
@@ -71,10 +71,33 @@ def test_settings_construct_from_dict():
 
 def test_default_camera_resolutions():
     cfg = load_settings()
-    assert cfg.video.channel_resolution("city") == (1280, 1080)
-    assert cfg.video.channel_resolution("aerial") == (848, 800)
-    assert cfg.video.channel_resolution("ground") == (848, 800)
+    assert cfg.video.channel_resolution("city") == (848, 800)
+    assert cfg.video.channel_resolution("aerial") == (424, 400)
+    assert cfg.video.channel_resolution("ground") == (424, 400)
     assert cfg.video.channel_fps("city") == 25
+
+
+def test_default_city_overview_pose():
+    cfg = load_settings()
+    pose = cfg.camera.city
+    assert pose.x == pytest.approx(243.323104858398)
+    assert pose.y == pytest.approx(-50.1084709167481)
+    assert pose.z == pytest.approx(200.0)
+    assert pose.pitch == pytest.approx(-90.0)
+    assert pose.fov == pytest.approx(90.0)
+
+
+def test_city_overview_pose_overlay(tmp_path: Path):
+    overlay = tmp_path / "overlay.toml"
+    overlay.write_text(
+        "[camera.city]\nx = 100.0\ny = -20.0\nz = 150.0\n",
+        encoding="utf-8",
+    )
+    cfg = load_settings(extra_config=overlay)
+    assert cfg.camera.city.x == pytest.approx(100.0)
+    assert cfg.camera.city.y == pytest.approx(-20.0)
+    assert cfg.camera.city.z == pytest.approx(150.0)
+    assert cfg.camera.city.pitch == pytest.approx(-90.0)
 
 
 def test_camera_resolution_overlay(tmp_path: Path):
@@ -86,5 +109,5 @@ def test_camera_resolution_overlay(tmp_path: Path):
     )
     cfg = load_settings(extra_config=overlay)
     assert cfg.video.channel_resolution("city") == (1920, 1080)
-    assert cfg.video.channel_resolution("aerial") == (848, 800)
+    assert cfg.video.channel_resolution("aerial") == (424, 400)
     assert cfg.video.channel_fps("ground") == 30
