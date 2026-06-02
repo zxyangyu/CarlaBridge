@@ -39,8 +39,8 @@ log = logging.getLogger(__name__)
 
 
 UGV_BLUEPRINT_CANDIDATES = (
-    "vehicle.carlamotors.firetruck",
-    "vehicle.lincoln.mkz_2017",
+    # "vehicle.carlamotors.firetruck",
+    # "vehicle.lincoln.mkz_2017",
     "vehicle.tesla.model3",
 )
 # If the firetruck cannot fit a spawn point, try another emergency vehicle only.
@@ -48,10 +48,11 @@ UGV_BLUEPRINT_FALLBACKS = (
     "vehicle.ford.ambulance",
 )
 
+# Static props only — vehicles have physics and collide with the UGV / road traffic.
 FIRE_MARKER_BLUEPRINTS = (
-    "vehicle.carlamotors.firetruck",
-    "vehicle.ford.ambulance",
+    "static.prop.streetbarrier",
     "static.prop.kiosk_01",
+    "static.prop.barrel",
 )
 
 UAV_ALTITUDE = 10.0          # default offset for design_poses export only
@@ -120,7 +121,7 @@ class S1FireScenario(Scenario):
         if not candidates:
             raise RuntimeError("S1: no UGV blueprint available in CARLA library")
 
-        spawn_transform = _make_transform(
+        configured_transform = _make_transform(
             x=vehicle_spawn.x,
             y=vehicle_spawn.y,
             z=vehicle_spawn.z,
@@ -131,30 +132,43 @@ class S1FireScenario(Scenario):
             vehicle_spawn.x, vehicle_spawn.y, vehicle_spawn.z, vehicle_spawn.yaw,
         )
 
-        ugv_actor = None
-        for bp in candidates:
-            try:
-                actor = carla_world.try_spawn_actor(bp, spawn_transform)
-            except Exception:
-                log.exception("UGV: spawn(%s) raised", bp.id)
-                continue
-            if actor is not None:
-                ugv_actor = actor
-                log.info(
-                    "UGV spawned: bp=%s actor_id=%d at (%.1f, %.1f, %.1f)",
-                    bp.id, actor.id,
-                    vehicle_spawn.x, vehicle_spawn.y, vehicle_spawn.z,
-                )
-                break
+        ugv_actor, anchor_transform, bp_id = _spawn_ugv(
+            carla_world, candidates, configured_transform, label="configured pose",
+        )
         if ugv_actor is None:
+            spawn_points = carla_world.get_map().get_spawn_points()
+            if not spawn_points:
+                raise RuntimeError(
+                    f"S1: no UGV at configured pose "
+                    f"({vehicle_spawn.x}, {vehicle_spawn.y}, {vehicle_spawn.z}) "
+                    f"and map has no spawn points to fall back to"
+                )
+            log.warning(
+                "S1: configured pose failed — trying %d map spawn point(s)",
+                len(spawn_points),
+            )
+            for sp_tf in spawn_points:
+                ugv_actor, anchor_transform, bp_id = _spawn_ugv(
+                    carla_world, candidates, sp_tf, label="map spawn point",
+                )
+                if ugv_actor is not None:
+                    sx, sy, sz, syaw = _transform_pose(sp_tf)
+                    log.info(
+                        "S1: UGV fallback spawn ok at map point (%.1f, %.1f, %.1f) yaw=%.1f",
+                        sx, sy, sz, syaw,
+                    )
+                    break
+        if ugv_actor is None or anchor_transform is None or bp_id is None:
+            n_sp = len(carla_world.get_map().get_spawn_points())
             raise RuntimeError(
                 f"S1: no UGV could be spawned at configured pose "
-                f"({vehicle_spawn.x}, {vehicle_spawn.y}, {vehicle_spawn.z})"
+                f"({vehicle_spawn.x}, {vehicle_spawn.y}, {vehicle_spawn.z}) "
+                f"or at any of {n_sp} map spawn point(s)"
             )
 
-        ax, ay, az = vehicle_spawn.x, vehicle_spawn.y, vehicle_spawn.z
+        ax, ay, az, anchor_yaw = _transform_pose(anchor_transform)
         self._anchor_world_xyz = (ax, ay, az)
-        self._anchor_yaw = vehicle_spawn.yaw
+        self._anchor_yaw = anchor_yaw
 
         self._register_actor(ugv_actor)
         self.fleet.register(
@@ -162,7 +176,7 @@ class S1FireScenario(Scenario):
         )
         self._register_entity("UGV-01")
         self.fleet.set_origin(
-            "UGV-01", Pose(x=ax, y=ay, z=az, yaw=vehicle_spawn.yaw)
+            "UGV-01", Pose(x=ax, y=ay, z=az, yaw=anchor_yaw)
         )
         self.event_log.add(
             "ok", "SCENARIO",
@@ -472,7 +486,7 @@ class S1FireScenario(Scenario):
         bp_candidates = (blueprint,) if blueprint else FIRE_MARKER_BLUEPRINTS
         bp_candidates = tuple(b for b in bp_candidates if b is not None)
         fire_transform = _make_transform(
-            x=pose.x, y=pose.y, z=pose.z + 0.5, yaw=self._anchor_yaw,
+            x=pose.x, y=pose.y, z=pose.z, yaw=self._anchor_yaw,
         )
         actor = self._spawn_first_available(
             bp_candidates, fire_transform, kind="fire_marker"
@@ -481,6 +495,7 @@ class S1FireScenario(Scenario):
             raise RuntimeError(
                 f"ignite_fire {id}: no blueprint spawnable from {bp_candidates}"
             )
+        self._stabilize_fire_actor(actor)
         self._register_actor(actor)
         self._fire_actors[id] = actor
         incident = Incident(
@@ -623,6 +638,20 @@ class S1FireScenario(Scenario):
         in_flt.state["index"] = next_idx
         uav.set_target(path[next_idx], cruise_speed=cruise)
 
+    def _stabilize_fire_actor(self, actor: "carla.Actor") -> None:
+        """Keep the visual marker fixed — vehicles would drift / collide."""
+        try:
+            import carla
+
+            if isinstance(actor, carla.Vehicle):
+                actor.set_autopilot(False)
+                actor.set_simulate_physics(False)
+                actor.apply_control(
+                    carla.VehicleControl(throttle=0.0, brake=1.0, hand_brake=True)
+                )
+        except Exception:  # pragma: no cover — best-effort with real CARLA
+            log.exception("stabilize fire actor failed for id=%s", actor.id)
+
     def _spawn_first_available(self, blueprint_ids, transform, *, kind: str):
         carla_world = self.world.carla_world
         blueprint_lib = carla_world.get_blueprint_library()
@@ -654,6 +683,36 @@ def _make_transform(*, x: float, y: float, z: float, yaw: float):
         carla.Location(x=x, y=y, z=z),
         carla.Rotation(yaw=yaw),
     )
+
+
+def _transform_pose(transform) -> tuple[float, float, float, float]:
+    """(x, y, z, yaw) from a CARLA or test fake Transform."""
+    loc = transform.location
+    rot = transform.rotation
+    return float(loc.x), float(loc.y), float(loc.z), float(rot.yaw)
+
+
+def _spawn_ugv(carla_world, candidates, transform, *, label: str):
+    """Try each blueprint at ``transform``; return (actor, transform, bp_id) or Nones."""
+    for bp in candidates:
+        try:
+            actor = carla_world.try_spawn_actor(bp, transform)
+        except Exception:
+            log.exception("UGV: spawn(%s) at %s raised", bp.id, label)
+            continue
+        if actor is None:
+            log.debug(
+                "UGV: try_spawn_actor(%s) at %s returned None (collision?)",
+                bp.id, label,
+            )
+            continue
+        x, y, z, _ = _transform_pose(transform)
+        log.info(
+            "UGV spawned: bp=%s actor_id=%d at (%.1f, %.1f, %.1f) [%s]",
+            bp.id, actor.id, x, y, z, label,
+        )
+        return actor, transform, bp.id
+    return None, None, None
 
 
 def _filter_existing(bp_lib, blueprint_ids):

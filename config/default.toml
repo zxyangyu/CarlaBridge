@@ -9,7 +9,7 @@ host = "127.0.0.1"
 port = 2000
 timeout_s = 30.0
 fixed_delta_seconds = 0.05
-map = "sandbox-v19"
+map = "RRD"
 
 [server]
 host = "0.0.0.0"
@@ -32,8 +32,8 @@ frame_queue_drop_log_interval_s = 5
 #   ground — same slot as aerial
 # city overview (world_pose) — tune x/y/z for your CARLA map center / demo area
 [camera.city]
-x = 237.9619691563268
-y = -25.26569342884618
+x = 0
+y = 0
 z = 45.0
 pitch = -90.0
 yaw = -90.0
@@ -54,23 +54,23 @@ default = "s1_fire"
 
 # UGV + virtual UAV spawn poses (design_poses.py → config/design_poses.json).
 [scenario.vehicle_spawn]
-x = 214.33909606933594
-y = -43.19072341918945
-z = 0.5
-yaw = 0.4857255220413208
+x = 5.50
+y = -19.98
+z = 0.50
+yaw = -180.00
 
 [scenario.uav_spawn]
-x = 214.33909606933594
-y = -43.19072341918945
-z = 10.5
-yaw = 0.4857255220413208
+x = 5.50
+y = -19.98
+z = 10.50
+yaw = -180.00
 
 # Fire incident positions — POST /scenario/fire ignores request body position.
 [[scenario.fire_markers]]
 id = "fire-001"
-x = 250
-y = -23
-z = 0.5
+x = 15.88
+y = 0.00
+z = 0.50
 
 [logging]
 level = "INFO"

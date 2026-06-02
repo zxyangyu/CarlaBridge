@@ -78,13 +78,18 @@ def test_default_camera_resolutions():
 
 
 def test_default_fire_markers():
+    import math
+
     cfg = load_settings()
     assert len(cfg.scenario.fire_markers) == 1
     marker = cfg.scenario.fire_markers[0]
+    vehicle = cfg.scenario.vehicle_spawn
     assert marker.id == "fire-001"
-    assert marker.x == pytest.approx(250)
-    assert marker.y == pytest.approx(-23)
-    assert marker.z == pytest.approx(0.5)
+    assert vehicle is not None
+    yaw = math.radians(vehicle.yaw)
+    assert marker.x == pytest.approx(vehicle.x + 50.0 * math.cos(yaw))
+    assert marker.y == pytest.approx(vehicle.y + 50.0 * math.sin(yaw))
+    assert marker.z == pytest.approx(vehicle.z)
 
 
 def test_fire_markers_overlay(tmp_path: Path):
