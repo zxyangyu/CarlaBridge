@@ -31,6 +31,31 @@ Role = Literal[
 ]
 
 
+# UAV heading smoothing (design: aerial camera follows flight direction).
+# 转向速率上限 — 镜头/机头每秒最多旋转的度数(中等响应)。后续可提升到 config。
+UAV_MAX_YAW_RATE_DEG_S = 150.0
+# 单 tick 水平位移小于此值时不更新航向(避免到点抖动 / atan2 噪声)。
+UAV_HEADING_MIN_STEP_M = 0.05
+
+
+def _shortest_angle_diff(a: float, b: float) -> float:
+    """b - a 归一化到 [-180, 180]。"""
+    return (b - a + 180.0) % 360.0 - 180.0
+
+
+def _approach_angle(current: float, target: float, max_delta: float) -> float:
+    """从 current 沿最短弧朝 target 旋转,单步最多 max_delta 度。
+
+    返回值归一化到 [-180, 180]。
+    """
+    diff = _shortest_angle_diff(current, target)
+    if abs(diff) <= max_delta:
+        result = target
+    else:
+        result = current + math.copysign(max_delta, diff)
+    return _shortest_angle_diff(0.0, result)
+
+
 @dataclass(slots=True)
 class Pose:
     """Cartesian + Euler (degrees) pose. Units: meters / degrees."""
@@ -117,16 +142,29 @@ class VirtualMember:
     def step(self, dt: float) -> None:
         """Advance one tick. If target is set, move toward it at cruise_speed.
 
+        Position comes from ``lerp_toward``; heading is derived independently
+        from the actual horizontal travel direction this tick so the aerial
+        camera (which follows ``pose.yaw``) points where the UAV is flying.
+        The heading is rotated toward the travel direction along the shortest
+        arc, rate-limited to ``UAV_MAX_YAW_RATE_DEG_S`` so turns look smooth.
+
         Battery drains slowly while in motion or always — keep it simple here:
         constant drain when there's a target; idle otherwise.
         """
         if self.target is None:
             return
         step_m = self.cruise_speed * dt
-        next_pose = self._pose.lerp_toward(self.target, step_m)
-        self._pose = next_pose
-        self.altitude = next_pose.z
-        self.heading = next_pose.yaw
+        prev = self._pose
+        moved = prev.lerp_toward(self.target, step_m)  # position only
+        dx, dy = moved.x - prev.x, moved.y - prev.y
+        if math.hypot(dx, dy) >= UAV_HEADING_MIN_STEP_M:
+            desired = math.degrees(math.atan2(dy, dx))
+            yaw = _approach_angle(prev.yaw, desired, UAV_MAX_YAW_RATE_DEG_S * dt)
+        else:
+            yaw = prev.yaw  # negligible horizontal motion — keep heading
+        self._pose = Pose(moved.x, moved.y, moved.z, yaw, moved.pitch, moved.roll)
+        self.altitude = self._pose.z
+        self.heading = yaw
         # Arrived?
         if self._pose.distance_to(self.target) < 1e-3:
             self.target = None

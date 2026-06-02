@@ -4,7 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from carlabridge.core.fleet import Fleet, Pose, VirtualMember
+from carlabridge.core.fleet import (
+    UAV_HEADING_MIN_STEP_M,
+    UAV_MAX_YAW_RATE_DEG_S,
+    Fleet,
+    Pose,
+    VirtualMember,
+    _approach_angle,
+    _shortest_angle_diff,
+)
 from carlabridge.core.incident import Incident
 
 
@@ -62,6 +70,59 @@ def test_virtual_member_no_target_is_noop():
     uav.step(dt=0.1)
     p = uav.pose()
     assert (p.x, p.y, p.z) == (7, 8, 9)
+
+
+# ---- heading follows flight direction (aerial camera tracking) ----------
+
+
+def test_shortest_angle_diff_wraps():
+    assert _shortest_angle_diff(170.0, -170.0) == pytest.approx(20.0)
+    assert _shortest_angle_diff(-170.0, 170.0) == pytest.approx(-20.0)
+    assert _shortest_angle_diff(0.0, 90.0) == pytest.approx(90.0)
+
+
+def test_approach_angle_takes_short_arc_not_long_way():
+    # 170 -> -170 is +20° across the ±180 seam, NOT -340°.
+    out = _approach_angle(170.0, -170.0, max_delta=5.0)
+    assert out == pytest.approx(175.0)  # rotated +5° toward -170 (i.e. 190 → -170)
+
+
+def test_approach_angle_snaps_within_max_delta():
+    assert _approach_angle(0.0, 3.0, max_delta=5.0) == pytest.approx(3.0)
+
+
+def test_virtual_member_heading_converges_to_travel_direction():
+    uav = VirtualMember(
+        entity_id="UAV-01", role="patrol", _pose=Pose(0, 0, 50), cruise_speed=10.0,
+    )
+    uav.set_target(Pose(0, 100, 50))  # +y → expect heading ≈ 90°
+    for _ in range(60):
+        uav.step(dt=1.0 / 30.0)
+    assert uav.heading == pytest.approx(90.0, abs=1.0)
+
+
+def test_virtual_member_heading_is_rate_limited():
+    uav = VirtualMember(
+        entity_id="UAV-01", role="patrol",
+        _pose=Pose(0, 0, 50, yaw=180.0), cruise_speed=10.0,
+    )
+    uav.set_target(Pose(100, 0, 50))  # +x → desired heading 0°
+    uav.step(dt=1.0 / 30.0)
+    # One tick must not snap from 180° to 0°; it rotates by ~max_rate * dt.
+    expected_step = UAV_MAX_YAW_RATE_DEG_S / 30.0
+    diff = abs(_shortest_angle_diff(180.0, uav.heading))
+    assert diff == pytest.approx(expected_step, abs=0.5)
+
+
+def test_virtual_member_tiny_step_keeps_heading():
+    uav = VirtualMember(
+        entity_id="UAV-01", role="patrol",
+        _pose=Pose(0, 0, 50, yaw=42.0), cruise_speed=10.0,
+    )
+    # Target within UAV_HEADING_MIN_STEP_M horizontally → heading unchanged.
+    uav.set_target(Pose(UAV_HEADING_MIN_STEP_M / 2.0, 0, 50))
+    uav.step(dt=1.0 / 30.0)
+    assert uav.heading == pytest.approx(42.0)
 
 
 def test_fleet_register_and_get():
