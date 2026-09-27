@@ -3,8 +3,8 @@
 实时中间件，桥接 CARLA 仿真器、React 数字孪生指挥前端、Urban Agent 调度系统。
 
 - **上游**：CARLA 0.9.16 (Town10HD_Opt)
-- **下游**：`D:\urban_frontend` (React + Socket.IO + WebRTC，本期只读)
-- **平行**：Urban Agent — 完全外部进程，通过 `/agent` namespace 接入；本仓 root 的 `test_agent.py` 是协议等价的测试客户端
+- **下游**：`urban_frontend (https://github.com/zxyangyu/urban_frontend)` (React + Socket.IO + WebRTC，本期只读)
+- **平行**：`Urban Agent https://github.com/zxyangyu/UrbanAgent` — 完全外部进程，通过 `/agent` namespace 接入；本仓 root 的 `test_agent.py` 是协议等价的测试客户端
 
 ## 1. 文档结构
 
