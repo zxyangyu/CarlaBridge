@@ -6,6 +6,8 @@
 - **下游**：`urban_frontend (https://github.com/zxyangyu/urban_frontend)` (React + Socket.IO + WebRTC，本期只读)
 - **平行**：`Urban Agent https://github.com/zxyangyu/UrbanAgent` — 完全外部进程，通过 `/agent` namespace 接入；本仓 root 的 `test_agent.py` 是协议等价的测试客户端
 
+[![Urban Agent Simulation Platform]()]([https://www.youtube.com/watch?v=VIDEO_ID](https://www.bilibili.com/video/BV1nsah6uEkB/))
+
 ## 1. 文档结构
 
 仓库根 4 份"活"文档，加 `docs/archive/` 5 份历史 changelog：
