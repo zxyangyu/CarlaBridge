@@ -8,7 +8,7 @@
 
 ## 演示视频
 
-[![CarlaBridge 端到端演示](docs/assets/carlabridge-demo-cover.webp)](https://www.bilibili.com/video/BV1nsah6uEkB/)
+[![CarlaBridge 端到端演示](docs/城市仿真数字孪生架构概览.png)](https://www.bilibili.com/video/BV1nsah6uEkB/)
 
 [在哔哩哔哩观看完整演示](https://www.bilibili.com/video/BV1nsah6uEkB/)
 
